@@ -12,6 +12,7 @@ from tqdm import tqdm
 from concept_graphs.utils import set_seed
 from concept_graphs.mapping.utils import test_unique_segments
 
+import visualizer
 
 # A logger for this file
 log = logging.getLogger(__name__)
@@ -107,6 +108,12 @@ def main(cfg: DictConfig):
     # Few more stats
     stats = dict(fps=fps, mapping_time=mapping_time, n_objects=n_objects, n_frames=len(dataset))
     json.dump(stats, open(output_dir_map / "stats.json", "w"))
+    
+    # Offline visualization of the map
+    viz_cfg = OmegaConf.load("conf/visualizer.yaml")
+    viz_cfg.mode = "offline_screenshot"
+    viz_cfg.map_path = str(output_dir_map)
+    visualizer.main(viz_cfg)
 
     # Create symlink to latest map
     symlink = output_dir / "latest_map"

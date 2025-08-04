@@ -13,6 +13,10 @@ import copy
 from concept_graphs.utils import load_map, set_seed
 from concept_graphs.viz.utils import similarities_to_rgb
 from concept_graphs.mapping.similarity.semantic import CosineSimilarity01
+import threading
+import os
+import sys
+import time
 
 # A logger for this file
 log = logging.getLogger(__name__)
@@ -72,12 +76,19 @@ class CallbackManager:
         elif self.mode == "gui":
             for name, geometry in zip(geometry_names, geometries):
                 vis.add_geometry(name, geometry)
+        elif self.mode == "offline_screenshot":
+            # vis is the OffscreenRenderer.scene
+            import open3d.visualization.rendering as rendering
+            for name, geometry in zip(geometry_names, geometries):
+                mat = rendering.MaterialRecord()
+                mat.shader = "defaultUnlit"
+                vis.add_geometry(name, geometry, mat)
 
     def remove_geometries(self, vis, geometry_names, geometries):
         if self.mode == "keycallback":
             for geometry in geometries:
                 vis.remove_geometry(geometry)
-        elif self.mode == "gui":
+        elif self.mode in ["gui", "offline_screenshot"]:
             for name in geometry_names:
                 vis.remove_geometry(name)
 
@@ -85,7 +96,7 @@ class CallbackManager:
         if self.mode == "keycallback":
             for geometry in geometries:
                 vis.update_geometry(geometry)
-        elif self.mode == "gui":
+        elif self.mode in ["gui", "offline_screenshot"]:
             self.remove_geometries(vis, geometry_names, geometries)
             self.add_geometries(vis, geometry_names, geometries)
 
@@ -187,7 +198,7 @@ def load_point_cloud(path):
 
 
 @hydra.main(version_base=None, config_path="conf", config_name="visualizer")
-def main(cfg: DictConfig):
+def main(cfg: DictConfig, offline_screenshots: bool = True):
     set_seed(cfg.seed)
     path = Path(cfg.map_path)
     clip_ft = np.load(path / "clip_features.npy")
@@ -230,6 +241,36 @@ def main(cfg: DictConfig):
 
         app.add_window(vis)
         app.run()
+    
+    elif cfg.mode == "offline_screenshot":
+        import open3d.visualization.rendering as rendering
+        width, height = 1024, 768
+        vis = rendering.OffscreenRenderer(width, height)
+        scene = vis.scene
+        scene.set_background([1.0, 1.0, 1.0, 1.0])
+
+        # Add all point clouds using CallbackManager
+        manager.add_geometries(scene, manager.pcd_names, manager.pcd)
+
+        # Camera setup: fit to geometry
+        bounds = scene.bounding_box
+        center = bounds.get_center()
+        extent = bounds.get_extent()
+        eye = center + [0, 0, max(extent)]
+        up = [0, 1, 0]
+        scene.camera.look_at(center, eye, up)
+
+        # --- RGB screenshot ---
+        manager.toggle_rgb(scene)
+        img = vis.render_to_image()
+        o3d.io.write_image(str(path / "cg_rgb.png"), img)
+
+        # --- Random color screenshot ---
+        manager.toggle_random_color(scene)
+        img = vis.render_to_image()
+        o3d.io.write_image(str(path / "cg_random_color.png"), img)
+
+        print("Screenshots taken (headless).")
 
     else:
         raise ValueError("Invalid mode.")

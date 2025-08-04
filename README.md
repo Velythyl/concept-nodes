@@ -30,7 +30,7 @@ output_dir: ??? # Where to save outputs
 ```
 Alternatively, you can create your own `conf/paths/my_paths.yaml` and append `paths=my_paths` to all commands.
 
-It is recommended to put your paths on a filesystem with ample storage (such as a cluster's `$SCRATCH`), in which case we recommend you use `ln -s $SCRATCH/your/cache_data_and_output_dir /your/concept-nodes/data` for ease of access. 
+It is recommended to put your paths on a filesystem with ample storage (such as a cluster's `$SCRATCH`).
 
 ## Model Checkpoints
 Download the following to ```cache_dir```, as defined in your config.
