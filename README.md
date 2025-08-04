@@ -17,7 +17,7 @@ pip install --upgrade pip
 pip install -e concept-nodes
 ```
 ```bash
-pip install -e concept-nodes/rgbd_dataset
+pip install -e concept-nodes/rgbd_dataset # note: on some platforms, hydra might have trouble instantiating modules in this directory. To fix this, you can `ln -s` to it such that it is also found at the root of this repository
 ```
 ## Paths 
 Update `conf/paths/paths.yaml`.
@@ -30,6 +30,8 @@ output_dir: ??? # Where to save outputs
 ```
 Alternatively, you can create your own `conf/paths/my_paths.yaml` and append `paths=my_paths` to all commands.
 
+It is recommended to put your paths on a filesystem with ample storage (such as a cluster's `$SCRATCH`), in which case we recommend you use `ln -s $SCRATCH/your/cache_data_and_output_dir /your/concept-nodes/data` for ease of access. 
+
 ## Model Checkpoints
 Download the following to ```cache_dir```, as defined in your config.
  * [mobile_sam.pt](https://github.com/ultralytics/assets/releases/download/v8.2.0/mobile_sam.pt)
@@ -38,7 +40,7 @@ Download the following to ```cache_dir```, as defined in your config.
 
 ## Example Data
 You can download the Replica dataset to `data_dir` using the 
-[download script](https://github.com/cvg/nice-slam/blob/master/scripts/download_replica.sh) from Nice-SLAM.
+[download script](https://github.com/cvg/nice-slam/blob/master/scripts/download_replica.sh) from Nice-SLAM, followed by `mv Replica <cache_dir>`
 
 # Usage
 ## Quickstart
