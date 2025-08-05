@@ -17,7 +17,7 @@ pip install --upgrade pip
 pip install -e concept-nodes
 ```
 ```bash
-pip install -e concept-nodes/rgbd_dataset # note: on some platforms, hydra might have trouble instantiating modules in this directory. To fix this, you can `ln -s` to it such that it is also found at the root of this repository
+pip install -e concept-nodes/rgbd_dataset
 ```
 ## Paths 
 Update `conf/paths/paths.yaml`.
