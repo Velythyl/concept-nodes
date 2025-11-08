@@ -1,4 +1,4 @@
-# concept-nodes
+# perpetua-concept-nodes
 For Perpetua 2.0
 
 Reimplementation of some ConceptGraphs functionalities. Check out [our website](https://concept-graphs.github.io/) and [the original code](https://github.com/concept-graphs/concept-graphs).
@@ -8,7 +8,7 @@ Please note that this codebase does not support the edges presented in the paper
 # Install
 Clone repository and submodules
 ```bash
-git clone --recurse-submodules https://github.com/sachaMorin/concept-nodes.git
+git clone --recurse-submodules git@github.com:kumaradityag/perpetua-concept-nodes
 ```
 
 Install dependencies. Preferably in a virtual environment.
@@ -16,10 +16,10 @@ Install dependencies. Preferably in a virtual environment.
 pip install --upgrade pip
 ```
 ```bash
-pip install -e concept-nodes
+pip install -e perpetua-concept-nodes
 ```
 ```bash
-pip install -e concept-nodes/rgbd_dataset
+pip install -e perpetua-concept-nodes/rgbd_dataset
 ```
 ## Paths 
 Update `conf/paths/paths.yaml`.
