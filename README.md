@@ -1,4 +1,6 @@
 # concept-nodes
+For Perpetua 2.0
+
 Reimplementation of some ConceptGraphs functionalities. Check out [our website](https://concept-graphs.github.io/) and [the original code](https://github.com/concept-graphs/concept-graphs).
 
 Please note that this codebase does not support the edges presented in the paper.
