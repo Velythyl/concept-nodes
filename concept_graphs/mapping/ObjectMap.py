@@ -149,37 +149,31 @@ class ObjectMap:
         self,
         rgb_crops: List[np.ndarray],
         mask_crops: List[np.ndarray],
+        point_map_crops: List[np.ndarray],
         features: np.ndarray,
         scores: np.ndarray,
-        pcd_points: List[np.ndarray],
-        pcd_rgb: List[np.ndarray],
         camera_pose: np.ndarray,
-        is_bg: np.ndarray,
     ):
         n_objects = len(rgb_crops)
         assert (
             n_objects
             == len(mask_crops)
+            == len(point_map_crops)
             == len(features)
             == len(scores)
-            == len(pcd_points)
-            == len(pcd_rgb)
-            == len(is_bg)
         )
 
         for i in range(len(rgb_crops)):
-            if not is_bg[i]:
-                object = self.object_factory(
-                    rgb=rgb_crops[i],
-                    mask=mask_crops[i],
-                    semantic_ft=np.copy(features[i]),
-                    pcd_points=pcd_points[i],
-                    pcd_rgb=pcd_rgb[i],
-                    camera_pose=camera_pose,
-                    score=float(scores[i]),
-                    timestep_created=self.n_updates,
-                )
-                self.append(object)
+            object = self.object_factory(
+                rgb=rgb_crops[i],
+                mask=mask_crops[i],
+                point_map=point_map_crops[i],
+                semantic_ft=np.copy(features[i]),
+                camera_pose=camera_pose,
+                score=float(scores[i]),
+                timestep_created=self.n_updates,
+            )
+            self.append(object)
 
         self.collate()
 
@@ -346,6 +340,8 @@ class ObjectMap:
                     s.camera_pose.tolist() for s in obj.segments.get_sorted()
                 ],
                 centroid=np.mean(np.asarray(obj.pcd.points), axis=0).tolist(),
+                affordances=obj.affordances,
+                interaction_points=obj.interaction_points,
             )
             annotations.append(obj_ann)
             point_counter += n_points_object
@@ -366,17 +362,23 @@ class ObjectMap:
         for i, obj in enumerate(self):
             path_rgb = path / "segments" / str(i) / "rgb"
             path_mask = path / "segments" / str(i) / "mask"
+            path_point_map = path / "segments" / str(i) / "point_map"
+
             os.makedirs(path_rgb, exist_ok=True)
             os.makedirs(path_mask, exist_ok=True)
+            os.makedirs(path_point_map, exist_ok=True)
 
             for j, seg in enumerate(obj.segments.get_sorted()):
                 rgb = seg.rgb
-                mask = seg.mask * 255
+                mask = seg.mask
+                point_map = seg.point_map
+
                 cv2.imwrite(
                     str(path_rgb / f"{str(j).zfill(3)}.png"),
                     cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR),
                 )
-                cv2.imwrite(str(path_mask / f"{str(j).zfill(3)}.png"), mask)
+                np.save(path_mask / f"{str(j).zfill(3)}.npy", mask)
+                np.save(path_point_map / f"{str(j).zfill(3)}.npy", point_map)
 
     def to(self, device: str):
         self.device = device
