@@ -55,7 +55,11 @@ def main(cfg: DictConfig):
 
         progress_bar.update(1)
         n_segments += len(local_map)
-        progress_bar.set_postfix(objects=len(main_map), map_segments=main_map.n_segments, detected_segments=n_segments)
+        progress_bar.set_postfix(
+            objects=len(main_map),
+            map_segments=main_map.n_segments,
+            detected_segments=n_segments,
+        )
 
     # Postprocessing
     main_map.filter_min_segments(n_min_segments=cfg.final_min_segments, grace=False)
@@ -105,7 +109,9 @@ def main(cfg: DictConfig):
     OmegaConf.save(cfg, output_dir_map / "config.yaml")
 
     # Few more stats
-    stats = dict(fps=fps, mapping_time=mapping_time, n_objects=n_objects, n_frames=len(dataset))
+    stats = dict(
+        fps=fps, mapping_time=mapping_time, n_objects=n_objects, n_frames=len(dataset)
+    )
     json.dump(stats, open(output_dir_map / "stats.json", "w"))
 
     # Create symlink to latest map
