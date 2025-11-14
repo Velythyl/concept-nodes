@@ -19,6 +19,7 @@ class Object:
         segment_heap_size: int,
         semantic_mode: str,
         timestep_created: int,
+        timestamp: float = None,
         max_points_pcd: int = 1200,
         denoising_callback: Union[PointCloudCallback, None] = None,
         downsampling_callback: Union[PointCloudCallback, None] = None,
@@ -49,6 +50,8 @@ class Object:
             score=score,
         )
         self.segments.push(segment)
+
+        self.timestamps = [timestamp]
 
         # Set our first object-level point cloud
         pcd_rgb = segment.pcd_rgb
@@ -208,6 +211,9 @@ class RunningAverageObject(Object):
         self.semantic_ft = self.semantic_ft / np.linalg.norm(self.semantic_ft, 2)
 
         self.pcd += other.pcd
+
+        self.timestamps.extend(other.timestamps)
+        self.timestamps = list(set(self.timestamps))  # remove duplicates
 
         self.n_segments += other.n_segments
         self.timestep_created = min(self.timestep_created, other.timestep_created)

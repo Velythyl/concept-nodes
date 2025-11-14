@@ -153,6 +153,7 @@ class ObjectMap:
         features: np.ndarray,
         scores: np.ndarray,
         camera_pose: np.ndarray,
+        timestamp: float = None,
     ):
         n_objects = len(rgb_crops)
         assert (
@@ -172,6 +173,7 @@ class ObjectMap:
                 camera_pose=camera_pose,
                 score=float(scores[i]),
                 timestep_created=self.n_updates,
+                timestamp=timestamp,
             )
             self.append(object)
 
@@ -340,8 +342,7 @@ class ObjectMap:
                     s.camera_pose.tolist() for s in obj.segments.get_sorted()
                 ],
                 centroid=np.mean(np.asarray(obj.pcd.points), axis=0).tolist(),
-                affordances=obj.affordances,
-                interaction_points=obj.interaction_points,
+                timestamps=obj.timestamps,
             )
             annotations.append(obj_ann)
             point_counter += n_points_object
