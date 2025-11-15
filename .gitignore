@@ -167,3 +167,7 @@ cython_debug/
 
 # VS Code
 .vscode/
+
+# Misc
+label_pcl/
+.DS_Store
