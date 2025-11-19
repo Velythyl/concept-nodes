@@ -63,7 +63,7 @@ class YoloMobileSAM(SegmentationModel):
     def __call__(
         self, img: np.ndarray
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        with torch.no_grad():
+        with torch.inference_mode():
             img_bgr = img[..., ::-1].copy()
             yolo_output = self.yolo.predict(img_bgr, verbose=False)
 

@@ -16,7 +16,7 @@ class CLIP(FeatureExtractor):
         self.tokenizer = open_clip.get_tokenizer(kwargs["model_name"])
 
     def __call__(self, imgs: List[np.ndarray]) -> torch.Tensor:
-        with torch.no_grad():
+        with torch.inference_mode():
             imgs_processed = [self.preprocess(Image.fromarray(img)) for img in imgs]
             batch = torch.stack(imgs_processed).to(self.device)
             features = self.model.encode_image(batch)
@@ -25,7 +25,7 @@ class CLIP(FeatureExtractor):
         return features
 
     def encode_text(self, texts: List[str]) -> torch.Tensor:
-        with torch.no_grad():
+        with torch.inference_mode():
             text_tokens = self.tokenizer(texts).to(self.device)
             features = self.model.encode_text(text_tokens)
             features /= features.norm(dim=-1, keepdim=True)
