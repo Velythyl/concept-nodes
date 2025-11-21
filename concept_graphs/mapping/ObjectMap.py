@@ -8,7 +8,7 @@ import json
 import cv2
 from .Object import Object, ObjectFactory
 from .similarity.Similarity import Similarity
-from .utils import pairs_to_connected_components
+from .utils import pairs_to_connected_components, compute_bounds
 
 
 class ObjectMap:
@@ -185,15 +185,31 @@ class ObjectMap:
         mask_diagonal: bool,
     ) -> Tuple[List[bool], List[int]]:
         """Compute similarities with objects from another map."""
+
+        other_min, other_max = compute_bounds(other.pcd_tensors)
+        
+        # Identify objects in self that are within the bounding box of other
+        objs_in_frustrum = []
+        for i, pcd in enumerate(self.pcd_tensors):
+            inside_other = ((pcd >= other_min) & (pcd <= other_max)).all(dim=1).any()
+            if inside_other:
+                objs_in_frustrum.append(i)
+
+        # If there is no match, return empty lists
+        if len(objs_in_frustrum) == 0:
+            return [False] * len(other), np.arange(len(other)).tolist()
+        objs_in_frustrum = torch.tensor(objs_in_frustrum, device=self.device)
+
         mergeable, merge_idx = self.similarity(
-            main_semantic=self.semantic_tensor,
-            main_pcd=self.pcd_tensors,
-            main_centroid=self.centroid_tensor,
+            main_semantic=self.semantic_tensor[objs_in_frustrum],
+            main_pcd=[self.pcd_tensors[i] for i in objs_in_frustrum],
+            main_centroid=self.centroid_tensor[objs_in_frustrum],
             other_semantic=other.semantic_tensor,
             other_pcd=other.pcd_tensors,
             other_centroid=other.centroid_tensor,
             mask_diagonal=mask_diagonal,
         )
+        merge_idx = [objs_in_frustrum[idx].item() for idx in merge_idx]
 
         return mergeable, merge_idx
 
