@@ -1,22 +1,43 @@
 from typing import Tuple, List
 import torch
+import torch.nn.functional as F
 from .Similarity import GeometricSimilarity
 
 
 def point_cloud_overlap(
     pcd_1: torch.Tensor, pcd_2: torch.Tensor, eps: float
 ) -> Tuple[torch.Tensor]:
-    pcd_1 = pcd_1.unsqueeze(1)  # (n1, 1, 3)
-    pcd_2 = pcd_2.unsqueeze(0)  # (1, n2, 3)
-
-    dist = ((pcd_1 - pcd_2) ** 2).sum(dim=-1)  # (n1, n2)
-
-    is_close = torch.sqrt(dist) < eps
-
-    d1 = is_close.any(dim=1).to(torch.float).mean()
-    d2 = is_close.any(dim=0).to(torch.float).mean()
-
+    # Create masks for valid points
+    valid_1 = ~torch.isnan(pcd_1).any(dim=-1)  # (n1,)
+    valid_2 = ~torch.isnan(pcd_2).any(dim=-1)  # (n2,)
+    
+    is_close = torch.cdist(pcd_1, pcd_2) < eps # (n1, n2)
+    
+    overlap_1 = is_close.any(dim=1).to(pcd_1.dtype)  # (n1,)
+    overlap_2 = is_close.any(dim=0).to(pcd_2.dtype)  # (n2,)
+    
+    overlap_1 = torch.where(valid_1, overlap_1, torch.nan)
+    overlap_2 = torch.where(valid_2, overlap_2, torch.nan)
+    
+    d1 = torch.nanmean(overlap_1)
+    d2 = torch.nanmean(overlap_2)
+    
     return d1, d2
+
+# def point_cloud_overlap(
+#     pcd_1: torch.Tensor, pcd_2: torch.Tensor, eps: float
+# ) -> Tuple[torch.Tensor]:
+#     pcd_1 = pcd_1.unsqueeze(1)  # (n1, 1, 3)
+#     pcd_2 = pcd_2.unsqueeze(0)  # (1, n2, 3)
+
+#     dist = ((pcd_1 - pcd_2) ** 2).sum(dim=-1)  # (n1, n2)
+
+#     is_close = torch.sqrt(dist) < eps
+
+#     d1 = is_close.any(dim=1).to(torch.float).mean()
+#     d2 = is_close.any(dim=0).to(torch.float).mean()
+
+#     return d1, d2
 
 
 class PointCloudOverlapClosestK(GeometricSimilarity):
@@ -27,6 +48,113 @@ class PointCloudOverlapClosestK(GeometricSimilarity):
         self.agg = agg
         self.k = max(2, k)
         self.max_dist_centroid = max_dist_centroid
+
+    # Fully batched version
+    # def __call__(
+    #     self,
+    #     main_pcd: List[torch.Tensor],
+    #     main_centroid: torch.Tensor,
+    #     other_pcd: List[torch.Tensor],
+    #     other_centroid: torch.Tensor,
+    #     is_symmetrical: bool,
+    # ) -> torch.Tensor:
+    #     dist_centroids = torch.cdist(main_centroid, other_centroid)
+
+    #     k = min(len(main_pcd), self.k)
+    #     closest_k = torch.topk(dist_centroids, k=k, dim=0, largest=False).indices.T
+    #     result = torch.zeros_like(dist_centroids)
+    #     # Pad point clouds if they have less than max_points_pcd points
+    #     max_n1 = max([pcd.shape[0] for pcd in main_pcd])
+    #     max_n2 = max([pcd.shape[0] for pcd in other_pcd])
+    #     padded_main = torch.stack([
+    #         F.pad(seq, (0, 0, 0, max_n1 - seq.shape[0]), value=torch.nan)
+    #         for seq in main_pcd
+    #     ]).to(torch.float16)
+    #     padded_other = torch.stack([
+    #         F.pad(seq, (0, 0, 0, max_n2 - seq.shape[0]), value=torch.nan)
+    #         for seq in other_pcd
+    #     ]).to(torch.float16)
+
+    #     n_other = len(other_pcd)
+    #     other_indices = torch.arange(n_other).unsqueeze(1).expand(-1, k).reshape(-1)  # (n_other * k,)
+    #     main_indices = closest_k.reshape(-1)  # (n_other * k,)
+
+    #     selected_main = padded_main[main_indices]  # (n_other * k, max_n1, 3)
+    #     selected_other = padded_other[other_indices]  # (n_other * k, max_n2, 3)
+
+    #     point_cloud_overlap_batched = torch.vmap(point_cloud_overlap, in_dims=(0, 0, None))
+    #     sim1, sim2 = point_cloud_overlap_batched(selected_main, selected_other, self.eps)
+
+    #     # Aggregate similarities
+    #     if self.agg == "sum":
+    #         sim = sim1 + sim2
+    #     elif self.agg == "mean":
+    #         sim = (sim1 + sim2) / 2
+    #     elif self.agg == "max":
+    #         sim = torch.max(sim1, sim2)
+    #     elif self.agg == "other":
+    #         sim = sim2
+    #     else:
+    #         raise ValueError(f"Unknown aggregation method {self.agg}")
+
+    #     # Handle symmetrical case
+    #     if is_symmetrical:
+    #         sym_mask = (main_indices == other_indices)
+    #         sim = torch.where(sym_mask, torch.tensor(1.0), sim)
+
+    #     # Handle max distance filter
+    #     dist_values = dist_centroids[main_indices, other_indices]  # (n_other * k,)
+    #     dist_mask = dist_values <= self.max_dist_centroid
+    #     sim = torch.where(dist_mask, sim, torch.tensor(0.0))
+        
+    #     # Scatter results back to result matrix
+    #     result = torch.zeros_like(dist_centroids)
+    #     result[main_indices, other_indices] = sim.to(dist_centroids.dtype)
+
+    #     return result
+
+    # def __call__(
+    #     self,
+    #     main_pcd: List[torch.Tensor],
+    #     main_centroid: torch.Tensor,
+    #     other_pcd: List[torch.Tensor],
+    #     other_centroid: torch.Tensor,
+    #     is_symmetrical: bool,
+    # ) -> torch.Tensor:
+    #     dist_centroids = torch.cdist(main_centroid, other_centroid)
+
+    #     k = min(len(main_pcd), self.k)
+    #     closest_k = torch.topk(dist_centroids, k=k, dim=0, largest=False).indices.T
+    #     result = torch.zeros_like(dist_centroids)
+
+    #     for other_i, other_pcd_i in enumerate(other_pcd):
+    #         indices = closest_k[other_i]
+    #         for main_i in indices:
+    #             if is_symmetrical and main_i == other_i:
+    #                 result[main_i, other_i] = 1.0
+    #                 continue
+
+    #             if dist_centroids[main_i, other_i] > self.max_dist_centroid:
+    #                 continue
+
+    #             sim1, sim2 = point_cloud_overlap(
+    #                 main_pcd[main_i], other_pcd_i, eps=self.eps
+    #             )
+
+    #             if self.agg == "sum":
+    #                 sim = sim1 + sim2
+    #             elif self.agg == "mean":
+    #                 sim = (sim1 + sim2) / 2
+    #             elif self.agg == "max":
+    #                 sim = torch.max(sim1, sim2)
+    #             elif self.agg == "other":
+    #                 sim = sim2
+    #             else:
+    #                 raise ValueError(f"Unknown aggregation method {self.agg}")
+
+    #             result[main_i, other_i] = sim
+
+    #     return result
 
     def __call__(
         self,
@@ -41,34 +169,64 @@ class PointCloudOverlapClosestK(GeometricSimilarity):
         k = min(len(main_pcd), self.k)
         closest_k = torch.topk(dist_centroids, k=k, dim=0, largest=False).indices.T
         result = torch.zeros_like(dist_centroids)
+        # Pad point clouds if they have less than max_points_pcd points
+        max_n1 = max([pcd.shape[0] for pcd in main_pcd])
+        max_n2 = max([pcd.shape[0] for pcd in other_pcd])
+        padded_main = torch.stack([
+            F.pad(seq, (0, 0, 0, max_n1 - seq.shape[0]), value=torch.nan)
+            for seq in main_pcd
+        ]).to(torch.float32)
+        padded_other = torch.stack([
+            F.pad(seq, (0, 0, 0, max_n2 - seq.shape[0]), value=torch.nan)
+            for seq in other_pcd
+        ]).to(torch.float32)
 
+        point_cloud_overlap_batched = torch.vmap(point_cloud_overlap, in_dims=(0, None, None))
+
+        # Iterate over each point cloud in other_pcd
         for other_i, other_pcd_i in enumerate(other_pcd):
-            indices = closest_k[other_i]
-            for main_i in indices:
-                if is_symmetrical and main_i == other_i:
-                    result[main_i, other_i] = 1.0
-                    continue
+            # Get k nearest neighbors for this other point cloud
+            k_nearest_indices = closest_k[other_i]  # (k,)
+            
+            # Filter by distance
+            dist_values = dist_centroids[k_nearest_indices, other_i]
+            valid_mask = dist_values <= self.max_dist_centroid
+            
+            if not valid_mask.any():
+                continue  # Skip if no valid pairs
+            
+            valid_indices = k_nearest_indices[valid_mask]
+            
+            # Select the k nearest main point clouds
+            selected_main = padded_main[valid_indices]  # (num_valid, max_n1, 3)
 
-                if dist_centroids[main_i, other_i] > self.max_dist_centroid:
-                    continue
-
-                sim1, sim2 = point_cloud_overlap(
-                    main_pcd[main_i], other_pcd_i, eps=self.eps
-                )
-
-                if self.agg == "sum":
-                    sim = sim1 + sim2
-                elif self.agg == "mean":
-                    sim = (sim1 + sim2) / 2
-                elif self.agg == "max":
-                    sim = torch.max(sim1, sim2)
-                elif self.agg == "other":
-                    sim = sim2
-                else:
-                    raise ValueError(f"Unknown aggregation method {self.agg}")
-
-                result[main_i, other_i] = sim
-
+            # Compute similarities using vmap
+            sim1, sim2 = point_cloud_overlap_batched(
+                selected_main, 
+                other_pcd_i.to(torch.float32), 
+                self.eps
+            )
+            
+            # Aggregate similarities
+            if self.agg == "sum":
+                sim = sim1 + sim2
+            elif self.agg == "mean":
+                sim = (sim1 + sim2) / 2
+            elif self.agg == "max":
+                sim = torch.max(sim1, sim2)
+            elif self.agg == "other":
+                sim = sim2
+            else:
+                raise ValueError(f"Unknown aggregation method {self.agg}")
+            
+            # Handle symmetrical case for valid indices
+            if is_symmetrical:
+                sym_mask = (valid_indices == other_i)
+                sim = torch.where(sym_mask, torch.tensor(1.0, device=sim.device), sim)
+            
+            # Store results
+            result[valid_indices, other_i] = sim.to(dist_centroids.dtype)
+        
         return result
 
 
