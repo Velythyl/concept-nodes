@@ -84,7 +84,7 @@ class Object:
         self.update_geometry_np()
 
     def update_geometry_np(self):
-        self.pcd_np = np.asarray(self.pcd.points)  # No copy
+        self.pcd_np = np.asarray(self.pcd.points, dtype=np.float32)  # No copy
         self.centroid = np.mean(self.pcd_np, axis=0)
 
         if len(self.pcd_np) > self.max_points_pcd:
@@ -153,8 +153,8 @@ class Object:
 
     def pcd_to_np(self):
         # Make object pickable
-        pcd_points = np.array(self.pcd.points)
-        pcd_colors = np.array(self.pcd.colors)
+        pcd_points = np.array(self.pcd.points, dtype=np.float32)
+        pcd_colors = np.array(self.pcd.colors, dtype=np.float32)
         self.pcd = {"points": pcd_points, "colors": pcd_colors}
 
     def pcd_to_o3d(self):
