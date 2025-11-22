@@ -1,0 +1,7 @@
+_target_: concept_graphs.perception.segmentation.SAM3.SAM3
+model_type: sam3
+bpe_path: ${cache_dir}/bpe_simple_vocab_16e6.txt.gz
+queries_path: ${cache_dir}/procthor_classes.txt
+threshold: 0.5
+sam_batch_size: 1
+device: ${device}

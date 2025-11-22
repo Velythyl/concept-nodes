@@ -2,9 +2,8 @@
 defaults:
   - base
   - /ft_extraction: CLIP_H14
-  - override /segmentation: YoloMobileSAM
+  - override /segmentation: SAM3
   - _self_
-
 
 name: cg-detector
 sim_thresh: 0.90
@@ -29,4 +28,3 @@ mapping:
 perception:
   segment_scoring_method: area
   crop_bg_color: null
-

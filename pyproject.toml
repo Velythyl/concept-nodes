@@ -11,6 +11,10 @@ dependencies = [
     "ultralytics",
     "openai",
     "numpy<=1.26.4",
+    "sam3@git+https://github.com/kumaradityag/sam3.git",
+    "einops",
+    "decord",
+    "pycocotools",
 ]
 requires-python = ">=3.10"
 
