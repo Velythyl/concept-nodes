@@ -126,11 +126,17 @@ class PointCloudOverlapClosestK(GeometricSimilarity):
     #     ]).to(torch.float16)
 
     #     n_other = len(other_pcd)
-    #     other_indices = torch.arange(n_other).unsqueeze(1).expand(-1, k).reshape(-1)  # (n_other * k,)
+    #     other_indices = torch.arange(n_other, device=dist_centroids.device).unsqueeze(1).expand(-1, k).reshape(-1)  # (n_other * k,)
     #     main_indices = closest_k.reshape(-1)  # (n_other * k,)
 
-    #     selected_main = padded_main[main_indices]  # (n_other * k, max_n1, 3)
-    #     selected_other = padded_other[other_indices]  # (n_other * k, max_n2, 3)
+    #     sym_mask = (main_indices == other_indices) if is_symmetrical else None
+    #     dist_values = dist_centroids[main_indices, other_indices]
+    #     dist_mask = dist_values <= self.max_dist_centroid
+    #     compute_mask = (~sym_mask if is_symmetrical else torch.ones_like(dist_mask, dtype=torch.bool)) \
+    #            & dist_mask
+
+    #     selected_main = padded_main[main_indices[compute_mask]]  
+    #     selected_other = padded_other[other_indices[compute_mask]]
 
     #     point_cloud_overlap_batched = torch.vmap(point_cloud_overlap, in_dims=(0, 0, None))
     #     sim1, sim2 = point_cloud_overlap_batched(selected_main, selected_other, self.eps)
@@ -149,12 +155,9 @@ class PointCloudOverlapClosestK(GeometricSimilarity):
 
     #     # Handle symmetrical case
     #     if is_symmetrical:
-    #         sym_mask = (main_indices == other_indices)
     #         sim = torch.where(sym_mask, torch.tensor(1.0), sim)
 
     #     # Handle max distance filter
-    #     dist_values = dist_centroids[main_indices, other_indices]  # (n_other * k,)
-    #     dist_mask = dist_values <= self.max_dist_centroid
     #     sim = torch.where(dist_mask, sim, torch.tensor(0.0))
         
     #     # Scatter results back to result matrix
