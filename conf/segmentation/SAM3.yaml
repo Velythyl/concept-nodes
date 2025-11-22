@@ -3,5 +3,5 @@ model_type: sam3
 bpe_path: ${cache_dir}/bpe_simple_vocab_16e6.txt.gz
 queries_path: ${cache_dir}/procthor_classes.txt
 threshold: 0.5
-sam_batch_size: 1
+sam_batch_size: 45 # Adjust based on your GPU memory
 device: ${device}

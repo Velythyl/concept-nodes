@@ -9,9 +9,6 @@ warnings.filterwarnings("ignore", category=UserWarning, module="sam3")
 
 import torch
 
-# Ensure inference mode is enabled
-torch.inference_mode().__enter__()
-
 from sam3.train.data.collator import collate_fn_api as collate
 from sam3.model.utils.misc import copy_data_to_device
 from sam3 import build_sam3_image_model
@@ -109,52 +106,44 @@ class SAM3(SegmentationModel):
             prompts = f.read().splitlines()
         return prompts
 
-    def __call__(
-        self, img: np.ndarray
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        # Convert input once
-        pil_img = Image.fromarray(img)
-        all_prompts = self.prompts  # local reference
-        masks_list, boxes_list, scores_list = [], [], []
+    def __call__(self, img: np.ndarray):
+        with torch.inference_mode(), torch.no_grad():
+            pil_img = Image.fromarray(img)
+            all_prompts = self.prompts
 
-        if self.batch_size == -1:
-            self.batch_size = len(all_prompts)
+            masks_list, boxes_list, scores_list = [], [], []
 
-        # Helper: iterate in chunks
-        for start in range(0, len(all_prompts), self.batch_size):
-            prompt_batch = all_prompts[start : start + self.batch_size]
+            if self.batch_size == -1:
+                self.batch_size = len(all_prompts)
 
-            datapoint = self.create_empty_datapoint()
-            self.set_image(datapoint, pil_img)
+            for start in range(0, len(all_prompts), self.batch_size):
+                prompt_batch = all_prompts[start : start + self.batch_size]
 
-            # Add only this batch of prompts
-            for prompt in prompt_batch:
-                self.add_text_prompt(datapoint, prompt)
+                datapoint = self.create_empty_datapoint()
+                self.set_image(datapoint, pil_img)
 
-            # Apply transforms
-            datapoint = self.transform(datapoint)
+                for prompt in prompt_batch:
+                    self.add_text_prompt(datapoint, prompt)
 
-            # Collate & move to device
-            batch = collate([datapoint], dict_key="sam3_image")["sam3_image"]
-            batch = copy_data_to_device(batch, self.device, non_blocking=True)
+                datapoint = self.transform(datapoint)
+                batch = collate([datapoint], dict_key="sam3_image")["sam3_image"]
+                batch = copy_data_to_device(batch, self.device, non_blocking=True)
 
-            # Forward
-            outputs = self.model(batch)
+                outputs = self.model(batch)
+                results = self.postprocessor.process_results(outputs, batch.find_metadatas)
 
-            # Postprocess
-            results = self.postprocessor.process_results(outputs, batch.find_metadatas)
+                for _, processed in results.items():
+                    masks_list.append(processed["masks"].squeeze(1).cpu())
+                    boxes_list.append(processed["boxes"].cpu())
+                    scores_list.append(processed["scores"].cpu())
 
-            # Collect per-chunk
-            for _, processed in results.items():
-                masks_list.append(processed["masks"].squeeze(1))
-                boxes_list.append(processed["boxes"])
-                scores_list.append(processed["scores"])
+                del batch, outputs, results, datapoint
+                torch.cuda.empty_cache()
 
-        # Concatenate all chunks
-        masks = torch.cat(masks_list, dim=0)
-        boxes = torch.cat(boxes_list, dim=0)
-        scores = torch.cat(scores_list, dim=0)
+            masks = torch.cat(masks_list, dim=0)
+            boxes = torch.cat(boxes_list, dim=0)
+            scores = torch.cat(scores_list, dim=0)
 
-        # Reset internal counter for next call
-        self.counter = 0
-        return masks, boxes, scores
+            self.counter = 0
+            return masks, boxes, scores
+
