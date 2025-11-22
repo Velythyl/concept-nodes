@@ -43,6 +43,7 @@ class ObjectMap:
 
         self.semantic_tensor: torch.Tensor = None
         self.pcd_tensors: List[torch.Tensor] = None
+        self.vertices_tensor: torch.Tensor = None
         self.centroid_tensor: torch.Tensor = None
 
         # Map from index in collated tensors (e.g., semantic_tensor, geometry_tensor) to object key in self.objects
@@ -67,6 +68,10 @@ class ObjectMap:
     @property
     def pcd_np(self) -> List[np.ndarray]:
         return [o.pcd_np for o in self]
+
+    @property
+    def vertices_np(self) -> np.ndarray:
+        return np.stack([o.vertices for o in self], axis=0)
 
     @property
     def oriented_bbox_o3d(self) -> List[o3d.geometry.OrientedBoundingBox]:
@@ -120,6 +125,7 @@ class ObjectMap:
             self.pcd_tensors = [
                 torch.from_numpy(p).to(self.device) for p in self.pcd_np
             ]
+            self.vertices_tensor = torch.from_numpy(self.vertices_np).to(self.device)
             self.centroid_tensor = torch.from_numpy(self.centroids_np).to(self.device)
         else:
             self.object_pcds = None
@@ -127,9 +133,7 @@ class ObjectMap:
 
     def collate_semantic_ft(self):
         if len(self):
-            ft = list()
-            for obj in self.objects.values():
-                ft.append(obj.semantic_ft)
+            ft = [obj.semantic_ft for obj in self.objects.values()]
             self.semantic_tensor = torch.from_numpy(np.stack(ft, axis=0)).to(
                 self.device
             )
@@ -186,19 +190,14 @@ class ObjectMap:
     ) -> Tuple[List[bool], List[int]]:
         """Compute similarities with objects from another map."""
 
+        # Identify objects in map inside current point cloud's frustrum
         other_min, other_max = compute_bounds(other.pcd_tensors)
-        
-        # Identify objects in self that are within the bounding box of other
-        objs_in_frustrum = []
-        for i, pcd in enumerate(self.pcd_tensors):
-            inside_other = ((pcd >= other_min) & (pcd <= other_max)).all(dim=1).any()
-            if inside_other:
-                objs_in_frustrum.append(i)
+        main_in_other = ((self.vertices_tensor >= other_min) & (self.vertices_tensor <= other_max))
+        objs_in_frustrum = main_in_other.all(dim=2).any(1).nonzero(as_tuple=False).squeeze(1)
 
         # If there is no match, return empty lists
         if len(objs_in_frustrum) == 0:
             return [False] * len(other), np.arange(len(other)).tolist()
-        objs_in_frustrum = torch.tensor(objs_in_frustrum, device=self.device)
 
         mergeable, merge_idx = self.similarity(
             main_semantic=self.semantic_tensor[objs_in_frustrum],
@@ -209,7 +208,8 @@ class ObjectMap:
             other_centroid=other.centroid_tensor,
             mask_diagonal=mask_diagonal,
         )
-        merge_idx = [objs_in_frustrum[idx].item() for idx in merge_idx]
+        objs_in_frustrum = objs_in_frustrum.tolist()
+        merge_idx = [objs_in_frustrum[idx] for idx in merge_idx]
 
         return mergeable, merge_idx
 
