@@ -1,11 +1,11 @@
 defaults:
   - algo: CGDetector
-  - dataset: Perpetua
+  - dataset: SemiStaticSim
   - paths: paths
   - _self_
 
 name: cg-detector
-sim_thresh: 0.7
+sim_thresh: 0.85
 overlap_eps: 0.025
 voxel_size: 0.025
 denoising_eps: 0.1
@@ -13,7 +13,7 @@ max_points_pcd: 8000
 final_min_segments: 2
 
 device: cuda
-debug: false
+debug: true
 caption: false
 tag: false
 save_map: true
