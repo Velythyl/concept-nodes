@@ -69,6 +69,7 @@ def extract_rgb_crops(
 ) -> List[np.ndarray]:
     crops = []
     for i, box in enumerate(bbox):
+        box = box.astype(int)
         crop = img[box[1] : box[3], box[0] : box[2]]
         if mask_crops is not None and bg_color is not None:
             crop = np.where(mask_crops[i][:, :, np.newaxis], crop, bg_color)
@@ -79,6 +80,7 @@ def extract_rgb_crops(
 def extract_mask_crops(masks: np.ndarray, bbox: np.ndarray) -> List[np.ndarray]:
     crops = []
     for mask, box in zip(masks, bbox):
+        box = box.astype(int)
         crop = mask[box[1] : box[3], box[0] : box[2]]
         crops.append(crop)
     return crops
