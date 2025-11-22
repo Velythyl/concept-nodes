@@ -130,7 +130,9 @@ class SAM3(SegmentationModel):
                 batch = copy_data_to_device(batch, self.device, non_blocking=True)
 
                 outputs = self.model(batch)
-                results = self.postprocessor.process_results(outputs, batch.find_metadatas)
+                results = self.postprocessor.process_results(
+                    outputs, batch.find_metadatas
+                )
 
                 for _, processed in results.items():
                     masks_list.append(processed["masks"].squeeze(1).cpu())
@@ -144,6 +146,7 @@ class SAM3(SegmentationModel):
             boxes = torch.cat(boxes_list, dim=0)
             scores = torch.cat(scores_list, dim=0)
 
+            boxes = boxes.round().int()
+
             self.counter = 0
             return masks, boxes, scores
-
