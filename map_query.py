@@ -121,7 +121,8 @@ class MapQueryEngine:
             found_details = {
                 "present": False,
                 "receptacle": None,
-                "timestamps": []
+                "timestamps": [],
+                "map_object_id": None
             }
 
             # 3. Verify candidates
