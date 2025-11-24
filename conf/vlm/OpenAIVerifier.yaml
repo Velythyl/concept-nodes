@@ -5,7 +5,8 @@ system_prompt: |
   The object tag will be given by the user. You will be provided multiple views of the same object.
   Your task is to provide a list of "YES" if the object in the images matches the tag, and "NO" otherwise.
   The length of your response should match the number of images provided.
-user_query: "Describe the object in a few words."
+user_query: |
+  For each image, output YES if it clearly contains the object corresponding to the object tag, otherwise output NO.
 max_images: 5
 retry_attempts: 3
 verify_mode: single # Options: majority_vote, unanimous, single

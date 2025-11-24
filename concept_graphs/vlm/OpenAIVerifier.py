@@ -88,9 +88,7 @@ class OpenAIVerifier:
                     {
                         "type": "input_text",
                         "text": (
-                            "You are a strict visual verifier. "
-                            "For each image, output YES if it clearly contains the object "
-                            "corresponding to the object tag, otherwise output NO. "
+                            f"{self.user_query}\n"
                             f"Object tag: {object_tag}"
                         ),
                     },
