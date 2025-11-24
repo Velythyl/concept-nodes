@@ -101,6 +101,9 @@ class PerceptionPipeline:
         keep = areas > self.min_mask_area_px
         object_masks, bbox, scores = object_masks[keep], bbox[keep], scores[keep]
 
+        if len(object_masks) == 0:
+            return None
+
         # Crops and Feature extraction
         object_mask_crops = extract_mask_crops(object_masks, bbox)
         rgb_crops = extract_rgb_crops(rgb, bbox, object_mask_crops)

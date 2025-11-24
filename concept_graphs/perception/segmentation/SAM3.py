@@ -142,6 +142,9 @@ class SAM3(SegmentationModel):
                 del batch, outputs, results, datapoint
                 torch.cuda.empty_cache()
 
+            if len(masks_list) == 0:
+                return None, None, None
+
             masks = torch.cat(masks_list, dim=0)
             boxes = torch.cat(boxes_list, dim=0)
             scores = torch.cat(scores_list, dim=0)
