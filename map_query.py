@@ -148,7 +148,8 @@ class MapQueryEngine:
                     found_details = {
                         "present": True,
                         "receptacle": rec_name,
-                        "timestamps": obj_data.get("timestamps", [])
+                        "timestamps": obj_data.get("timestamps", []),
+                        "map_object_id": idx
                     }
                     
                     break
