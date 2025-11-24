@@ -1,0 +1,10 @@
+defaults:
+  - dataset: SemiStaticSim
+  - paths: paths
+  - ft_extraction: CLIP_H14
+  - vlm@vlm_verifier: OpenAIVerifier
+  - _self_
+
+map_path: ${output_dir}/semistaticsim_run_0_cg-detector_2025-11-24-12-09-26.769846
+top_k: 3
+device: cuda
