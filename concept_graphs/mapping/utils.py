@@ -2,6 +2,15 @@ from typing import List, Tuple
 import numpy as np
 from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import connected_components
+import torch
+
+
+def compute_bounds(pcd_tensors: List[torch.Tensor]) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Compute the bounds of a list of pointcloud tensors."""
+    points = torch.cat(pcd_tensors, dim=0)
+    mins = torch.min(points, axis=0).values
+    maxs = torch.max(points, axis=0).values
+    return mins, maxs
 
 
 def pairs_to_connected_components(

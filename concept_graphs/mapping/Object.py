@@ -33,6 +33,7 @@ class Object:
 
         self.pcd = None
         self.pcd_np = None
+        self.vertices = None
         self.centroid = None
         self.semantic_ft = None
         self.segments = SegmentHeap(max_size=segment_heap_size)
@@ -84,8 +85,10 @@ class Object:
         self.update_geometry_np()
 
     def update_geometry_np(self):
-        self.pcd_np = np.asarray(self.pcd.points)  # No copy
+        self.pcd_np = np.asarray(self.pcd.points, dtype=np.float32)  # No copy
         self.centroid = np.mean(self.pcd_np, axis=0)
+        aabb = self.pcd.get_axis_aligned_bounding_box()
+        self.vertices = np.asarray(aabb.get_box_points(), dtype=np.float32)
 
         if len(self.pcd_np) > self.max_points_pcd:
             sub = np.random.choice(
@@ -95,17 +98,19 @@ class Object:
 
     def update_semantic_ft(self):
         """Pick the representative semantic vector from the segments."""
-        ft = [v.semantic_ft for v in self.segments]
-        ft = np.stack(ft, axis=0)
+        ft = np.stack([v.semantic_ft for v in self.segments], axis=0)
 
         if self.semantic_mode == "mean":
             mean = np.mean(ft, axis=0)
-            self.semantic_ft = mean / np.linalg.norm(mean, 2)
+            norm = np.linalg.norm(mean)
+            if norm > 0:
+                self.semantic_ft = mean / norm
+            else:
+                self.semantic_ft = mean
         elif self.semantic_mode == "multi":
             if len(ft) < self.segment_heap_size:
                 multiply = self.segment_heap_size // len(ft) + 1
-                self.semantic_ft = np.concatenate([ft] * multiply, axis=0)
-                self.semantic_ft = self.semantic_ft[: self.segment_heap_size]
+                self.semantic_ft = np.concatenate([ft] * multiply, axis=0)[: self.segment_heap_size]
             else:
                 self.semantic_ft = ft
 
@@ -153,8 +158,8 @@ class Object:
 
     def pcd_to_np(self):
         # Make object pickable
-        pcd_points = np.array(self.pcd.points)
-        pcd_colors = np.array(self.pcd.colors)
+        pcd_points = np.array(self.pcd.points, dtype=np.float32)
+        pcd_colors = np.array(self.pcd.colors, dtype=np.float32)
         self.pcd = {"points": pcd_points, "colors": pcd_colors}
 
     def pcd_to_o3d(self):

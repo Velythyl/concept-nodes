@@ -1,17 +1,13 @@
 from typing import Tuple, List
 import torch
+import torch.nn.functional as F
 from .Similarity import GeometricSimilarity
 
 
 def point_cloud_overlap(
     pcd_1: torch.Tensor, pcd_2: torch.Tensor, eps: float
 ) -> Tuple[torch.Tensor]:
-    pcd_1 = pcd_1.unsqueeze(1)  # (n1, 1, 3)
-    pcd_2 = pcd_2.unsqueeze(0)  # (1, n2, 3)
-
-    dist = ((pcd_1 - pcd_2) ** 2).sum(dim=-1)  # (n1, n2)
-
-    is_close = torch.sqrt(dist) < eps
+    is_close = torch.cdist(pcd_1, pcd_2) < eps # (n1, n2)
 
     d1 = is_close.any(dim=1).to(torch.float).mean()
     d2 = is_close.any(dim=0).to(torch.float).mean()
@@ -70,7 +66,7 @@ class PointCloudOverlapClosestK(GeometricSimilarity):
                 result[main_i, other_i] = sim
 
         return result
-
+  
 
 class PointCloudOverlap(GeometricSimilarity):
     """Point Cloud Overlap."""
