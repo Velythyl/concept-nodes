@@ -112,7 +112,7 @@ class MapQueryEngine:
         text_features = self.ft_extractor.encode_text(queries_cleaned).cpu()
 
         # 2. Calculate Similarity Matrix: (num_queries, num_map_objects)
-        for i, query_text in tqdm(enumerate(queries_cleaned), total=len(queries_cleaned), desc="Processing Queries"):
+        for i, query_text in tqdm(enumerate(queries), total=len(queries), desc="Processing Queries"):
             query_feat = text_features[i].unsqueeze(0) # (1, dim)
             
             # Calculate similarity against all map objects
