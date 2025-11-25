@@ -21,6 +21,19 @@ pip install -e perpetua-concept-nodes
 ```bash
 pip install -e perpetua-concept-nodes/rgbd_dataset
 ```
+
+## Install SAM3
+If SAM3 was not part of the package when you first installed it - you can get it by running the following commands
+
+```bash
+pip install sam3@git+https://github.com/kumaradityag/sam3.git
+pip install einops decord pycocotools
+```
+
+Next, you will have to request access to the checkpoints on HuggingFace from [here](https://huggingface.co/facebook/sam3).
+You will also have to authenticate your account in the terminal by running `hf auth login`. Follow the steps [here](https://huggingface.co/docs/huggingface_hub/en/quick-start#authentication) to generate a user access token.
+
+
 ## Paths 
 Update `conf/paths/paths.yaml`.
 
