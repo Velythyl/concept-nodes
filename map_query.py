@@ -5,6 +5,7 @@ from typing import List, Dict, Optional
 import glob
 from natsort import natsorted
 
+import re
 import hydra
 import numpy as np
 import torch
@@ -17,6 +18,13 @@ from concept_graphs.vlm.OpenAIVerifier import OpenAIVerifier
 from concept_graphs.perception.ft_extraction.FeatureExtractor import FeatureExtractor
 
 log = logging.getLogger(__name__)
+
+def split_camel_preserve_acronyms(name):
+    # Insert space between lowercase → uppercase
+    # OR between acronym → normal word
+    s = re.sub(r'(?<=[a-z])(?=[A-Z])', ' ', name)
+    s = re.sub(r'(?<=[A-Z])(?=[A-Z][a-z])', ' ', s)
+    return s.lower()
 
 class MapQueryEngine:
     def __init__(
@@ -100,7 +108,8 @@ class MapQueryEngine:
         
         log.info("Encoding queries...")
         # Encode queries -> (num_queries, feature_dim)
-        text_features = self.ft_extractor.encode_text(queries).cpu()
+        queries_cleaned = [split_camel_preserve_acronyms(q.split('|')[0]) for q in queries]
+        text_features = self.ft_extractor.encode_text(queries_cleaned).cpu()
 
         # 2. Calculate Similarity Matrix: (num_queries, num_map_objects)
         
@@ -137,7 +146,8 @@ class MapQueryEngine:
                     continue
 
                 # Verify
-                is_match = self.verifier(images, query_text)
+                query_text_cleaned = split_camel_preserve_acronyms(query_text.split('|')[0])
+                is_match = self.verifier(images, query_text_cleaned)
                 
                 if is_match:
                     found = True
