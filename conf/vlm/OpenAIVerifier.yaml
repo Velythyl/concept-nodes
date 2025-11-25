@@ -1,0 +1,13 @@
+_target_: concept_graphs.vlm.OpenAIVerifier.OpenAIVerifier
+
+system_prompt: |
+  You are a helpful assistant that predicts whether the images provided show the object tag given to you. 
+  The object tag will be given by the user. You will be provided multiple views of the same object.
+  Your task is to provide a list of "YES" if the object in the images matches the tag, and "NO" otherwise.
+  The length of your response should match the number of images provided.
+user_query: |
+  For each image, output YES if it clearly contains the object corresponding to the object tag, otherwise output NO.
+max_images: 5
+retry_attempts: 3
+verify_mode: single # Options: majority_vote, unanimous, single
+model: gpt-5.1
