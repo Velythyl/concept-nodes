@@ -147,6 +147,9 @@ class QueryReceptacles(QueryObjects):
             query_feat = query_feat.to(self.device)
             features = self.features.to(self.device)
             sim_scores = self.semantic_sim(query_feat, features).squeeze().cpu()
+            if len(mapped_receptacles) > 0:
+                mapped_idx = torch.tensor(mapped_receptacles, dtype=torch.long)
+                sim_scores[mapped_idx] = 0.0
 
             # Get Top K indices
             top_k_indices = torch.argsort(sim_scores, descending=True)[: self.top_k]
@@ -162,7 +165,6 @@ class QueryReceptacles(QueryObjects):
             # 3. Verify candidates
             for idx in top_k_indices:
                 idx = int(idx)  # Ensure python int
-                bbox = self.bbox[idx]
 
                 # Get images
                 images = self.get_object_images(idx, limit=self.verifier.max_images)
@@ -179,6 +181,7 @@ class QueryReceptacles(QueryObjects):
 
                 if is_match:
                     # 4. Save results
+                    bbox = self.bbox[idx]
                     vertices = np.asarray(bbox.get_box_points())
                     rotation = bbox.R
                     center = bbox.center
@@ -193,6 +196,8 @@ class QueryReceptacles(QueryObjects):
                             "vertices": [v.tolist() for v in vertices],
                         },
                     }
+                    # Blacklist the receptacle as already mapped
+                    mapped_receptacles.append(idx)
 
             results[query_text] = found_details
 
