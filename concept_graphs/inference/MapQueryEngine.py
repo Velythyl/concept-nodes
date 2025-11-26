@@ -1,9 +1,11 @@
 import logging
 from typing import List, Dict, Optional
 import numpy as np
+import json
 
 import torch
 from tqdm import tqdm
+import open3d as o3d
 
 from concept_graphs.vlm.OpenAIVerifier import OpenAIVerifier
 from concept_graphs.utils import split_camel_preserve_acronyms
@@ -102,7 +104,6 @@ class QueryObjects(BaseMapEngine):
                 is_match = self.verifier(images, query_text_cleaned)
 
                 if is_match:
-
                     # 4. Spatial Association
                     centroid = obj_data["centroid"]
                     rec_name = self.find_receptacle(centroid, self.receptacles_bbox)
@@ -119,6 +120,41 @@ class QueryObjects(BaseMapEngine):
             results[query_text] = found_details
 
         return results
+
+    def visualize(self, res_path: str):
+        """Visualize all object point clouds with labels in an Open3D window."""
+        geometries = []
+        
+        # Add all point clouds
+        for pcd in self.pcd:
+            geometries.append(pcd)
+
+        # Read result json file
+        with open(res_path, 'r') as f:
+            results = json.load(f)
+
+        # Get pickupables
+        pickupable_ids = []
+        for _, val in results.items():
+            if val['present']:
+                pickupable_ids.append(val['map_object_id'])
+        
+        bboxes = [self.bbox[idx] for idx in pickupable_ids]
+        
+        # Add bounding boxes
+        for bbox in bboxes:
+            # Assign random color
+            color = np.random.rand(3)
+            bbox.color = color.tolist()
+            geometries.append(bbox)
+        
+        # Visualize
+        o3d.visualization.draw_geometries(
+            geometries,
+            window_name="Map Objects Visualization",
+            width=1024,
+            height=768,
+        )
 
 
 class QueryReceptacles(QueryObjects):
@@ -157,8 +193,7 @@ class QueryReceptacles(QueryObjects):
 
             found_details = {
                 "present": False,
-                "receptacle": None,
-                "timestamps": [],
+                "oobb": None,
                 "map_object_id": None,
             }
 
@@ -181,6 +216,8 @@ class QueryReceptacles(QueryObjects):
 
                 if is_match:
                     # 4. Save results
+                    # IT can re-write the receptacle... FIXME
+                    # README: also fix OOB
                     bbox = self.bbox[idx]
                     vertices = np.asarray(bbox.get_box_points())
                     rotation = bbox.R
@@ -188,6 +225,7 @@ class QueryReceptacles(QueryObjects):
                     extent = bbox.extent
 
                     found_details = {
+                        "present": True,
                         "map_object_id": idx,
                         "oobb": {
                             "center": center.tolist(),
@@ -202,3 +240,37 @@ class QueryReceptacles(QueryObjects):
             results[query_text] = found_details
 
         return results
+
+    def visualize(self, res_path: str):
+        """Visualize all object point clouds with labels in an Open3D window."""
+        geometries = []
+        
+        # Add all point clouds
+        for pcd in self.pcd:
+            geometries.append(pcd)
+
+        # Read result json file
+        with open(res_path, 'r') as f:
+            results = json.load(f)
+
+        # Get pickupables
+        receptacle_ids = []
+        for _, val in results.items():
+            receptacle_ids.append(val['map_object_id'])
+    
+        bboxes = [self.bbox[idx] for idx in receptacle_ids]
+        
+        # Add bounding boxes
+        for bbox in bboxes:
+            # Assign random color
+            color = np.random.rand(3)
+            bbox.color = color.tolist()
+            geometries.append(bbox)
+        
+        # Visualize
+        o3d.visualization.draw_geometries(
+            geometries,
+            window_name="Map Objects Visualization",
+            width=1024,
+            height=768,
+        )

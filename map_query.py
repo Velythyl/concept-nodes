@@ -41,6 +41,11 @@ def main(cfg: DictConfig):
     engine.save_results(results, output_path=output_path)
     log.info(f"Results saved to {output_path}")
 
+    if cfg.debug:
+        log.info("Visualizing map objects...")
+        engine.visualize(output_path)
+        
+
 
 if __name__ == "__main__":
     main()
