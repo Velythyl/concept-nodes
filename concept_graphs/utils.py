@@ -1,3 +1,4 @@
+import json
 import os
 import torch
 import numpy as np
@@ -6,9 +7,28 @@ import logging
 from .mapping.ObjectMap import ObjectMap
 import pickle
 import re
+import open3d as o3d
+from pathlib import Path
 
 # A logger for this file
 log = logging.getLogger(__name__)
+
+
+def load_point_cloud(path):
+    path = Path(path)
+    pcd = o3d.io.read_point_cloud(str(path / "point_cloud.pcd"))
+
+    with open(path / "segments_anno.json", "r") as f:
+        segments_anno = json.load(f)
+
+    # Build a pcd with random colors
+    pcd_o3d = []
+
+    for ann in segments_anno["segGroups"]:
+        obj = pcd.select_by_index(ann["segments"])
+        pcd_o3d.append(obj)
+
+    return pcd_o3d
 
 
 def set_seed(seed: int = 42) -> None:
@@ -33,9 +53,10 @@ def load_map(path: str) -> ObjectMap:
 
     return map
 
+
 def split_camel_preserve_acronyms(name):
     # Insert space between lowercase → uppercase
     # OR between acronym → normal word
-    s = re.sub(r'(?<=[a-z])(?=[A-Z])', ' ', name)
-    s = re.sub(r'(?<=[A-Z])(?=[A-Z][a-z])', ' ', s)
+    s = re.sub(r"(?<=[a-z])(?=[A-Z])", " ", name)
+    s = re.sub(r"(?<=[A-Z])(?=[A-Z][a-z])", " ", s)
     return s.lower()

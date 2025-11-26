@@ -1,9 +1,11 @@
 import logging
 from typing import List, Dict, Optional
-from natsort import natsorted
+import numpy as np
+import json
 
 import torch
 from tqdm import tqdm
+import open3d as o3d
 
 from concept_graphs.vlm.OpenAIVerifier import OpenAIVerifier
 from concept_graphs.utils import split_camel_preserve_acronyms
@@ -13,10 +15,14 @@ from .BaseMapEngine import BaseMapEngine
 log = logging.getLogger(__name__)
 
 
-class MapQueryObjects(BaseMapEngine):
-    def __init__(self, verifier: OpenAIVerifier, **kwargs):
+class QueryObjects(BaseMapEngine):
+    def __init__(
+        self, verifier: OpenAIVerifier, receptacles_bbox: Dict, top_k: int = 5, **kwargs
+    ):
         super().__init__(**kwargs)
         self.verifier = verifier
+        self.receptacles_bbox = receptacles_bbox
+        self.top_k = top_k
 
     def find_receptacle(
         self, object_centroid: List[float], receptacles: Dict
@@ -47,9 +53,7 @@ class MapQueryObjects(BaseMapEngine):
 
         return closest_rec
 
-    def process_queries(
-        self, queries: List[str], receptacles_bbox: Dict, top_k: int = 5
-    ) -> Dict:
+    def process_queries(self, queries: List[str], **kwargs) -> Dict:
         results = {}
 
         log.info("Encoding queries...")
@@ -72,7 +76,7 @@ class MapQueryObjects(BaseMapEngine):
             sim_scores = self.semantic_sim(query_feat, features).squeeze().cpu()
 
             # Get Top K indices
-            top_k_indices = torch.argsort(sim_scores, descending=True)[:top_k]
+            top_k_indices = torch.argsort(sim_scores, descending=True)[: self.top_k]
             top_k_indices = top_k_indices.cpu().numpy()
 
             found_details = {
@@ -100,10 +104,9 @@ class MapQueryObjects(BaseMapEngine):
                 is_match = self.verifier(images, query_text_cleaned)
 
                 if is_match:
-
                     # 4. Spatial Association
                     centroid = obj_data["centroid"]
-                    rec_name = self.find_receptacle(centroid, receptacles_bbox)
+                    rec_name = self.find_receptacle(centroid, self.receptacles_bbox)
 
                     found_details = {
                         "present": True,
@@ -117,3 +120,161 @@ class MapQueryObjects(BaseMapEngine):
             results[query_text] = found_details
 
         return results
+
+    def visualize(self, res_path: str):
+        """Visualize all object point clouds with labels in an Open3D window."""
+        geometries = []
+        
+        # Add all point clouds
+        for pcd in self.pcd:
+            geometries.append(pcd)
+
+        # Read result json file
+        with open(res_path, 'r') as f:
+            results = json.load(f)
+
+        # Get pickupables
+        pickupable_ids = []
+        for _, val in results.items():
+            if val['present']:
+                pickupable_ids.append(val['map_object_id'])
+        
+        bboxes = [self.bbox[idx] for idx in pickupable_ids]
+        
+        # Add bounding boxes
+        for bbox in bboxes:
+            # Assign random color
+            color = np.random.rand(3)
+            bbox.color = color.tolist()
+            geometries.append(bbox)
+        
+        # Visualize
+        o3d.visualization.draw_geometries(
+            geometries,
+            window_name="Map Objects Visualization",
+            width=1024,
+            height=768,
+        )
+
+
+class QueryReceptacles(QueryObjects):
+    def process_queries(self, queries: List[float]) -> Dict:
+        """
+        Overrides the base method to always return None since we are querying receptacles.
+        """
+        results = {}
+
+        log.info("Encoding queries...")
+        # Encode queries -> (num_queries, feature_dim)
+        queries_cleaned = [
+            split_camel_preserve_acronyms(q.split("|")[0]) for q in queries
+        ]
+        text_features = self.ft_extractor.encode_text(queries_cleaned).cpu()
+        mapped_receptacles = list()
+
+        # 2. Calculate Similarity Matrix: (num_queries, num_map_objects)
+        for i, query_text in tqdm(
+            enumerate(queries), total=len(queries), desc="Processing Queries"
+        ):
+            query_feat = text_features[i].unsqueeze(0)  # (1, dim)
+
+            # Calculate similarity against all map objects
+            # sim shape: (1, num_objects) -> squeeze to (num_objects)
+            query_feat = query_feat.to(self.device)
+            features = self.features.to(self.device)
+            sim_scores = self.semantic_sim(query_feat, features).squeeze().cpu()
+            if len(mapped_receptacles) > 0:
+                mapped_idx = torch.tensor(mapped_receptacles, dtype=torch.long)
+                sim_scores[mapped_idx] = 0.0
+
+            # Get Top K indices
+            top_k_indices = torch.argsort(sim_scores, descending=True)[: self.top_k]
+            top_k_indices = top_k_indices.cpu().numpy()
+
+            found_details = {
+                "present": False,
+                "oobb": None,
+                "map_object_id": None,
+            }
+            bboxes = list()
+            objects_id = list()
+
+            # 3. Verify candidates
+            for idx in top_k_indices:
+                idx = int(idx)  # Ensure python int
+
+                # Get images
+                images = self.get_object_images(idx, limit=self.verifier.max_images)
+                if len(images) == 0:
+                    log.warning(f"No images found for object ID {idx}. Skipping.")
+
+                    continue
+
+                # Verify
+                query_text_cleaned = split_camel_preserve_acronyms(
+                    query_text.split("|")[0]
+                )
+                is_match = self.verifier(images, query_text_cleaned)
+
+                if is_match:
+                    # 4. Save results
+                    bbox = self.bbox[idx]
+                    vertices = np.asarray(bbox.get_box_points())
+                    rotation = bbox.R
+                    center = bbox.center
+                    extent = bbox.extent
+
+                    objects_id.append(idx)
+                    bboxes.append({
+                            "center": center.tolist(),
+                            "rotation": rotation.flatten().tolist(),
+                            "extent": extent.tolist(),
+                            "vertices": [v.tolist() for v in vertices],
+                        })
+
+                    found_details = {
+                        "present": True,
+                    }
+                    # Blacklist the receptacle as already mapped
+                    mapped_receptacles.append(idx)
+
+            found_details["oobb"] = bboxes
+            found_details["map_object_id"] = objects_id
+            results[query_text] = found_details
+
+        return results
+
+    def visualize(self, res_path: str):
+        """Visualize all object point clouds with labels in an Open3D window."""
+        geometries = []
+        
+        # Add all point clouds
+        for pcd in self.pcd:
+            geometries.append(pcd)
+
+        # Read result json file
+        with open(res_path, 'r') as f:
+            results = json.load(f)
+
+        # Get pickupables
+        receptacle_ids = []
+        for _, val in results.items():
+            if val['present']:
+                receptacle_ids.extend(val['map_object_id'])
+    
+        bboxes = [self.bbox[idx] for idx in receptacle_ids]
+        
+        # Add bounding boxes
+        for bbox in bboxes:
+            # Assign random color
+            color = np.random.rand(3)
+            bbox.color = color.tolist()
+            geometries.append(bbox)
+        
+        # Visualize
+        o3d.visualization.draw_geometries(
+            geometries,
+            window_name="Map Objects Visualization",
+            width=1024,
+            height=768,
+        )

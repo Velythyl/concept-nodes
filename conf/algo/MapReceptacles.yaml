@@ -2,11 +2,10 @@
 defaults:
   - /ft_extraction: CLIP_H14
   - /vlm@vlm_verifier: OpenAIVerifier
-  - /inference: QueryObjects
+  - /inference: QueryReceptacles
   - _self_
 
-name: "verifier"
-top_k: 3
+name: "map_receptacles"
 
 semantic_similarity:
   _target_: concept_graphs.mapping.similarity.semantic.CosineSimilarity01
@@ -14,4 +13,4 @@ semantic_similarity:
 vlm_verifier:
   max_images: 5
   retry_attempts: 3
-  verify_mode: single   # Options: majority_vote, unanimous, single
+  verify_mode: majority_vote   # Options: majority_vote, unanimous, single
