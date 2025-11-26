@@ -5,9 +5,6 @@ from pathlib import Path
 import hydra
 from omegaconf import DictConfig
 
-from concept_graphs.mapping.similarity.semantic import CosineSimilarity01
-from concept_graphs.inference.MapQueryEngine import MapQueryObjects
-
 log = logging.getLogger(__name__)
 
 
@@ -21,8 +18,10 @@ def main(cfg: DictConfig):
     semantic_sim = hydra.utils.instantiate(cfg.semantic_similarity)
 
     # Get inputs
-    pickupable_names = dataset.get_pickupable_names()
-    receptacles_bbox = dataset.get_receptacles_bbox()
+    if cfg.name == "verifier":
+        queries = dataset.get_pickupable_names()
+    else:
+        raise NotImplementedError(f"Experiment name {cfg.name} not supported.")
 
     map_path = cfg.map_path
 
@@ -32,18 +31,14 @@ def main(cfg: DictConfig):
         ft_extractor=ft_extractor,
         semantic_sim_metric=semantic_sim,
         verifier=verifier,
+        receptacles_bbox=dataset.get_receptacles_bbox(),
     )
 
     # Run Query Logic
-    results = engine.process_queries(
-        queries=pickupable_names, receptacles_bbox=receptacles_bbox, top_k=cfg.top_k
-    )
+    results = engine.process_queries(queries=queries)
 
-    # Save Results
     output_path = Path(map_path) / "query_results.json"
-    with open(output_path, "w") as f:
-        json.dump(results, f, indent=4)
-
+    engine.save_results(results, output_path=output_path)
     log.info(f"Results saved to {output_path}")
 
 

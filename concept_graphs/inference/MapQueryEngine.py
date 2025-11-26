@@ -1,6 +1,6 @@
 import logging
 from typing import List, Dict, Optional
-from natsort import natsorted
+import json
 
 import torch
 from tqdm import tqdm
@@ -14,9 +14,13 @@ log = logging.getLogger(__name__)
 
 
 class MapQueryObjects(BaseMapEngine):
-    def __init__(self, verifier: OpenAIVerifier, **kwargs):
+    def __init__(
+        self, verifier: OpenAIVerifier, receptacles_bbox: Dict, top_k: int = 5, **kwargs
+    ):
         super().__init__(**kwargs)
         self.verifier = verifier
+        self.receptacles_bbox = receptacles_bbox
+        self.top_k = top_k
 
     def find_receptacle(
         self, object_centroid: List[float], receptacles: Dict
@@ -47,9 +51,7 @@ class MapQueryObjects(BaseMapEngine):
 
         return closest_rec
 
-    def process_queries(
-        self, queries: List[str], receptacles_bbox: Dict, top_k: int = 5
-    ) -> Dict:
+    def process_queries(self, queries: List[str], **kwargs) -> Dict:
         results = {}
 
         log.info("Encoding queries...")
@@ -72,7 +74,7 @@ class MapQueryObjects(BaseMapEngine):
             sim_scores = self.semantic_sim(query_feat, features).squeeze().cpu()
 
             # Get Top K indices
-            top_k_indices = torch.argsort(sim_scores, descending=True)[:top_k]
+            top_k_indices = torch.argsort(sim_scores, descending=True)[:self.top_k]
             top_k_indices = top_k_indices.cpu().numpy()
 
             found_details = {
@@ -103,7 +105,7 @@ class MapQueryObjects(BaseMapEngine):
 
                     # 4. Spatial Association
                     centroid = obj_data["centroid"]
-                    rec_name = self.find_receptacle(centroid, receptacles_bbox)
+                    rec_name = self.find_receptacle(centroid, self.receptacles_bbox)
 
                     found_details = {
                         "present": True,

@@ -65,3 +65,12 @@ class BaseMapEngine:
             images.append(img)
 
         return images
+
+    def process_queries(self, queries: List[str], **kwargs) -> Dict:
+        raise NotImplementedError("This method should be implemented by subclasses.")
+
+
+    def save_results(self, results, output_path):
+        """Save results to a JSON file."""
+        with open(output_path, "w") as f:
+            json.dump(results, f, indent=4)
