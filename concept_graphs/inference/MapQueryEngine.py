@@ -196,6 +196,8 @@ class QueryReceptacles(QueryObjects):
                 "oobb": None,
                 "map_object_id": None,
             }
+            bboxes = list()
+            objects_id = list()
 
             # 3. Verify candidates
             for idx in top_k_indices:
@@ -216,27 +218,28 @@ class QueryReceptacles(QueryObjects):
 
                 if is_match:
                     # 4. Save results
-                    # IT can re-write the receptacle... FIXME
-                    # README: also fix OOB
                     bbox = self.bbox[idx]
                     vertices = np.asarray(bbox.get_box_points())
                     rotation = bbox.R
                     center = bbox.center
                     extent = bbox.extent
 
-                    found_details = {
-                        "present": True,
-                        "map_object_id": idx,
-                        "oobb": {
+                    objects_id.append(idx)
+                    bboxes.append({
                             "center": center.tolist(),
                             "rotation": rotation.flatten().tolist(),
                             "extent": extent.tolist(),
                             "vertices": [v.tolist() for v in vertices],
-                        },
+                        })
+
+                    found_details = {
+                        "present": True,
                     }
                     # Blacklist the receptacle as already mapped
                     mapped_receptacles.append(idx)
 
+            found_details["oobb"] = bboxes
+            found_details["map_object_id"] = objects_id
             results[query_text] = found_details
 
         return results
@@ -256,7 +259,8 @@ class QueryReceptacles(QueryObjects):
         # Get pickupables
         receptacle_ids = []
         for _, val in results.items():
-            receptacle_ids.append(val['map_object_id'])
+            if val['present']:
+                receptacle_ids.extend(val['map_object_id'])
     
         bboxes = [self.bbox[idx] for idx in receptacle_ids]
         
