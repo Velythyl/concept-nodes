@@ -2,7 +2,6 @@ import hydra
 import torch
 from omegaconf import DictConfig
 import logging
-import json
 
 from pathlib import Path
 import numpy as np
@@ -10,7 +9,7 @@ import open3d as o3d
 import open3d.visualization.gui as gui
 import copy
 
-from concept_graphs.utils import load_map, set_seed
+from concept_graphs.utils import load_map, set_seed, load_point_cloud
 from concept_graphs.viz.utils import similarities_to_rgb
 from concept_graphs.mapping.similarity.semantic import CosineSimilarity01
 
@@ -167,23 +166,6 @@ class CallbackManager:
             vis.add_action("Toggle Number", self.toggle_numbers)
             vis.add_action("CLIP Query", self.query)
             vis.add_action("View Segments", self.view)
-
-
-def load_point_cloud(path):
-    path = Path(path)
-    pcd = o3d.io.read_point_cloud(str(path / "point_cloud.pcd"))
-
-    with open(path / "segments_anno.json", "r") as f:
-        segments_anno = json.load(f)
-
-    # Build a pcd with random colors
-    pcd_o3d = []
-
-    for ann in segments_anno["segGroups"]:
-        obj = pcd.select_by_index(ann["segments"])
-        pcd_o3d.append(obj)
-
-    return pcd_o3d
 
 
 @hydra.main(version_base=None, config_path="conf", config_name="visualizer")

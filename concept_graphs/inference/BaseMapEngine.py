@@ -11,6 +11,7 @@ import cv2
 
 from concept_graphs.mapping.similarity.semantic import CosineSimilarity01
 from concept_graphs.perception.ft_extraction.FeatureExtractor import FeatureExtractor
+from concept_graphs.utils import load_point_cloud
 
 log = logging.getLogger(__name__)
 
@@ -29,6 +30,8 @@ class BaseMapEngine:
 
         self.annotations = self._load_annotations()
         self.features = self._load_features()
+        self.pcd = self._load_point_clouds()
+        self.bbox = [pcd.get_oriented_bounding_box() for pcd in self.pcd]
         self.device = device
 
         log.info(
@@ -49,6 +52,9 @@ class BaseMapEngine:
         feats_np = np.load(feat_path)
         return torch.from_numpy(feats_np).float()
 
+    def _load_point_clouds(self) -> List[np.ndarray]:
+        return load_point_cloud(self.map_path)
+
     def get_object_images(self, object_id: int, limit: int = 5) -> List[np.ndarray]:
         """
         Loads RGB images for a specific object ID from the directory structure.
@@ -68,7 +74,6 @@ class BaseMapEngine:
 
     def process_queries(self, queries: List[str], **kwargs) -> Dict:
         raise NotImplementedError("This method should be implemented by subclasses.")
-
 
     def save_results(self, results, output_path):
         """Save results to a JSON file."""

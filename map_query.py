@@ -20,8 +20,8 @@ def main(cfg: DictConfig):
     # Get inputs
     if cfg.name == "verifier":
         queries = dataset.get_pickupable_names()
-    else:
-        raise NotImplementedError(f"Experiment name {cfg.name} not supported.")
+    elif cfg.name == "map_receptacles":
+        queries = dataset.get_receptacles_names()
 
     map_path = cfg.map_path
 

@@ -1,6 +1,6 @@
 import logging
 from typing import List, Dict, Optional
-import json
+import numpy as np
 
 import torch
 from tqdm import tqdm
@@ -13,7 +13,7 @@ from .BaseMapEngine import BaseMapEngine
 log = logging.getLogger(__name__)
 
 
-class MapQueryObjects(BaseMapEngine):
+class QueryObjects(BaseMapEngine):
     def __init__(
         self, verifier: OpenAIVerifier, receptacles_bbox: Dict, top_k: int = 5, **kwargs
     ):
@@ -74,7 +74,7 @@ class MapQueryObjects(BaseMapEngine):
             sim_scores = self.semantic_sim(query_feat, features).squeeze().cpu()
 
             # Get Top K indices
-            top_k_indices = torch.argsort(sim_scores, descending=True)[:self.top_k]
+            top_k_indices = torch.argsort(sim_scores, descending=True)[: self.top_k]
             top_k_indices = top_k_indices.cpu().numpy()
 
             found_details = {
@@ -115,6 +115,84 @@ class MapQueryObjects(BaseMapEngine):
                     }
 
                     break
+
+            results[query_text] = found_details
+
+        return results
+
+
+class QueryReceptacles(QueryObjects):
+    def process_queries(self, queries: List[float]) -> Dict:
+        """
+        Overrides the base method to always return None since we are querying receptacles.
+        """
+        results = {}
+
+        log.info("Encoding queries...")
+        # Encode queries -> (num_queries, feature_dim)
+        queries_cleaned = [
+            split_camel_preserve_acronyms(q.split("|")[0]) for q in queries
+        ]
+        text_features = self.ft_extractor.encode_text(queries_cleaned).cpu()
+        mapped_receptacles = list()
+
+        # 2. Calculate Similarity Matrix: (num_queries, num_map_objects)
+        for i, query_text in tqdm(
+            enumerate(queries), total=len(queries), desc="Processing Queries"
+        ):
+            query_feat = text_features[i].unsqueeze(0)  # (1, dim)
+
+            # Calculate similarity against all map objects
+            # sim shape: (1, num_objects) -> squeeze to (num_objects)
+            query_feat = query_feat.to(self.device)
+            features = self.features.to(self.device)
+            sim_scores = self.semantic_sim(query_feat, features).squeeze().cpu()
+
+            # Get Top K indices
+            top_k_indices = torch.argsort(sim_scores, descending=True)[: self.top_k]
+            top_k_indices = top_k_indices.cpu().numpy()
+
+            found_details = {
+                "present": False,
+                "receptacle": None,
+                "timestamps": [],
+                "map_object_id": None,
+            }
+
+            # 3. Verify candidates
+            for idx in top_k_indices:
+                idx = int(idx)  # Ensure python int
+                bbox = self.bbox[idx]
+
+                # Get images
+                images = self.get_object_images(idx, limit=self.verifier.max_images)
+                if len(images) == 0:
+                    log.warning(f"No images found for object ID {idx}. Skipping.")
+
+                    continue
+
+                # Verify
+                query_text_cleaned = split_camel_preserve_acronyms(
+                    query_text.split("|")[0]
+                )
+                is_match = self.verifier(images, query_text_cleaned)
+
+                if is_match:
+                    # 4. Save results
+                    vertices = np.asarray(bbox.get_box_points())
+                    rotation = bbox.R
+                    center = bbox.center
+                    extent = bbox.extent
+
+                    found_details = {
+                        "map_object_id": idx,
+                        "oobb": {
+                            "center": center.tolist(),
+                            "rotation": rotation.flatten().tolist(),
+                            "extent": extent.tolist(),
+                            "vertices": [v.tolist() for v in vertices],
+                        },
+                    }
 
             results[query_text] = found_details
 
