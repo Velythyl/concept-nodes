@@ -1,0 +1,11 @@
+# @package _global_
+defaults:
+  - /ft_extraction: CLIP_H14
+  - /vlm@vlm_verifier: OpenAIVerifier
+  - /inference: MapQueryEngine
+  - _self_
+
+name: "verifier"
+
+semantic_similarity:
+  _target_: concept_graphs.mapping.similarity.semantic.CosineSimilarity01

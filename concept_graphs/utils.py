@@ -5,6 +5,7 @@ import random
 import logging
 from .mapping.ObjectMap import ObjectMap
 import pickle
+import re
 
 # A logger for this file
 log = logging.getLogger(__name__)
@@ -31,3 +32,10 @@ def load_map(path: str) -> ObjectMap:
         obj.pcd_to_o3d()
 
     return map
+
+def split_camel_preserve_acronyms(name):
+    # Insert space between lowercase → uppercase
+    # OR between acronym → normal word
+    s = re.sub(r'(?<=[a-z])(?=[A-Z])', ' ', name)
+    s = re.sub(r'(?<=[A-Z])(?=[A-Z][a-z])', ' ', s)
+    return s.lower()

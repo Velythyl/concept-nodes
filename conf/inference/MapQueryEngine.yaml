@@ -1,0 +1,6 @@
+_target_: concept_graphs.inference.MapQueryEngine.MapQueryObjects
+map_path: ${map_path}
+ft_extractor: ???
+semantic_sim_metric: ???
+verifier: ???
+device: ${device}
