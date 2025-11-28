@@ -14,4 +14,4 @@ semantic_similarity:
 vlm_verifier:
   max_images: 5
   retry_attempts: 3
-  verify_mode: single   # Options: majority_vote, unanimous, single
+  verify_mode: single # Options: majority_vote, unanimous, single
