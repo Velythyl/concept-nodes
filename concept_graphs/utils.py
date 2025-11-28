@@ -60,3 +60,23 @@ def split_camel_preserve_acronyms(name):
     s = re.sub(r"(?<=[a-z])(?=[A-Z])", " ", name)
     s = re.sub(r"(?<=[A-Z])(?=[A-Z][a-z])", " ", s)
     return s.lower()
+
+def aabb_iou(c1: np.ndarray, c2: np.ndarray) -> float:
+    min1 = c1.min(axis=0)
+    max1 = c1.max(axis=0)
+    min2 = c2.min(axis=0)
+    max2 = c2.max(axis=0)
+
+    inter_min = np.maximum(min1, min2)
+    inter_max = np.minimum(max1, max2)
+    inter_dims = np.maximum(inter_max - inter_min, 0.0)
+    inter_vol = float(inter_dims[0] * inter_dims[1] * inter_dims[2])
+    if inter_vol <= 0:
+        return 0.0
+
+    vol1 = float(np.prod(max1 - min1))
+    vol2 = float(np.prod(max2 - min2))
+    if vol1 <= 0 or vol2 <= 0:
+        return 0.0
+
+    return inter_vol / (vol1 + vol2 - inter_vol)
