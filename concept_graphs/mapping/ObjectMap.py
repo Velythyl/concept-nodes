@@ -358,7 +358,7 @@ class ObjectMap:
                     s.camera_pose.tolist() for s in obj.segments.get_sorted()
                 ],
                 centroid=np.mean(np.asarray(obj.pcd.points), axis=0).tolist(),
-                timestamps=obj.timestamps,
+                timestamps=[float(t) for t in obj.timestamps],
             )
             annotations.append(obj_ann)
             point_counter += n_points_object
