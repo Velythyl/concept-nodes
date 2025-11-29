@@ -1,4 +1,8 @@
 import logging
+import shutil
+import os
+import glob
+from natsort import natsorted
 from typing import List, Dict, Optional
 import numpy as np
 import json
@@ -62,7 +66,7 @@ class QueryObjects(BaseMapEngine):
                     best_idx = idx
 
             receptacle_to_map[receptacle_key] = best_idx
-        
+
         return receptacle_to_map
 
     def find_receptacle(
@@ -79,6 +83,7 @@ class QueryObjects(BaseMapEngine):
 
         closest_rec = None
         min_dist_sq = float("inf")
+        # TODO: make assignment not based on centroid but being on centroid or overelapping bbox
 
         for rec_name, rec_data in receptacles.items():
             c = rec_data["center"]
@@ -209,6 +214,99 @@ class QueryObjects(BaseMapEngine):
 
         return results
 
+    def save_results(self, results, output_path, sssd_data: object):
+        """Save results using SSSD class."""
+        import polars as pl
+        # TODO: @miguel: Ask charlie how to save this using her thing.
+        timestamps = np.concatenate(
+            [data._timestamp for data in sssd_data.get_generator_of_selves()]
+        )
+        priviliged_assignments = np.concatenate(
+            [data._assignment for data in sssd_data.get_generator_of_selves()]
+        )
+        receptacle_to_int = {
+            name: i for i, name in enumerate(sssd_data.receptacles_in_scene)
+        }
+        pickupable_to_int = {
+            name: i for i, name in enumerate(sssd_data.pickupables_in_scene)
+        }
+
+        # -2 is not valid receptacle, -1 is not observed, 0 is absent and 1 is present
+        assignments = np.ones_like(priviliged_assignments, dtype=int) * -2
+
+        for p_name, res_data in results.items():
+            p_idx = pickupable_to_int[p_name]
+            # Populate receptacles that are either non-observed (-1) or absent (0)
+            for receptacle in res_data["receptacles"]:
+                rec_name = receptacle["receptacle_name"]
+                if rec_name == "OOB_FAKE_RECEPTACLE":
+                    continue
+                # Populating non-observed for all timestamps (-1)
+                r_idx = receptacle_to_int[rec_name]
+                assignments[:, p_idx, r_idx] = -1
+                # Populate absent for all receptacles (0)
+                for t in receptacle["receptacle_timestamps"]:
+                    t_idx = np.argmin(np.abs(timestamps - t))
+                    assignments[t_idx, p_idx, r_idx] = 0
+            # Populate presence (1) if it occurs
+            if res_data["present"]:
+                rec_name = res_data["present_receptacle_name"]
+                r_idx = receptacle_to_int[rec_name]
+                # Timestamps where the pickupable was observed
+                for t in res_data["query_timestamp"]:
+                    t_idx = np.argmin(np.abs(timestamps - t))
+                    assignments[t_idx, p_idx, r_idx] = 1
+                # Timestamps where the receptacle was observed with the pickupable
+                for rec_entry in res_data["receptacles"]:
+                    if rec_entry["receptacle_name"] != rec_name:
+                        continue
+                    for t in rec_entry["receptacle_timestamps"]:
+                        t_idx = np.argmin(np.abs(timestamps - t))
+                        assignments[t_idx, p_idx, r_idx] = 1
+
+        # Create res directory if it doesn't exist
+        if output_path.exists() and output_path.is_dir():
+            shutil.rmtree(output_path)
+        output_path.mkdir(parents=True, exist_ok=True)
+
+        # Save skeleton, delete old parquets and add new one
+        sssd_data.dump_to_parquet(output_path, dump_leftover=True, verbose=False)
+        parquet_paths = natsorted(glob.glob(str(output_path / "*.parquet")))
+        for pq_path in parquet_paths:
+            os.remove(pq_path)
+
+        # Create dummy data for non-used keys
+        data = pl.DataFrame({
+            "timestamp": timestamps,
+            "assignment": assignments
+        })
+        # Memory efficient way to add empty columns
+        data = data.with_columns([
+            pl.lit(None, dtype=pl.List(pl.Float64)).alias("position"),
+            pl.lit(None, dtype=pl.List(pl.Float64)).alias("rotation"),
+            pl.lit(None, dtype=pl.List(pl.Float64)).alias("aabb_center"),
+            pl.lit(None, dtype=pl.List(pl.Float64)).alias("aabb_size"),
+            pl.lit(None, dtype=pl.List(pl.List(pl.Float64))).alias("aabb_cornerPoints"),
+            pl.lit(None, dtype=pl.List(pl.List(pl.Float64))).alias("oobb_cornerPoints"),
+        ])
+        data.write_parquet(output_path / "scan_0.parquet")
+
+        # Save receptacles map ids
+        with open(output_path  / "receptacle_map_ids.json", "w") as f:
+            json.dump(self.receptacle_map_ids, f, indent=4)
+
+        # Save pickupable map ids
+        pickupable_map_ids = {}
+        for p_name, res_data in results.items():
+            if res_data["present"]:
+                pickupable_map_ids[p_name] = res_data["map_object_id"]
+        with open(output_path  / "pickupable_map_ids.json", "w") as f:
+            json.dump(pickupable_map_ids, f, indent=4)
+
+        # Save results in original format in case we want to plot
+        with open(output_path  / "query_results.json", "w") as f:
+            json.dump(results, f, indent=4)
+
     def visualize(self, res_path: str):
         """Visualize all object point clouds with labels using O3DVisualizer."""
         import open3d.visualization.gui as gui
@@ -228,8 +326,24 @@ class QueryObjects(BaseMapEngine):
             vis.add_geometry(f"pcd_{i}", pcd)
 
         # 3. Load Results
-        with open(res_path, "r") as f:
+        with open(res_path / "query_results.json", "r") as f:
             results = json.load(f)
+
+        # 3. Add Receptacles (From ground truth)
+        for r_name, r_data in self.receptacles_bbox.items():
+
+            # A. Extract the corners and convert to numpy array
+            corners = np.array(r_data["cornerPoints"], dtype=np.float64)
+
+            # create_from_points computes the tightest box around these 8 points
+            bbox = o3d.geometry.OrientedBoundingBox.create_from_points(
+                o3d.utility.Vector3dVector(corners)
+            )
+
+            bbox.color = [0, 0, 1]
+
+            vis.add_geometry(f"gt_receptacle_{r_name}", bbox)
+            vis.add_3d_label(bbox.get_center(), f" {r_name} ")
 
         # --- Pre-processing: Group names by map_id ---
         id_to_names = {}
@@ -249,8 +363,8 @@ class QueryObjects(BaseMapEngine):
             vis.add_geometry(f"receptacle_{map_id}", bbox)
 
             # Combine names into one string
-            combined_label = "\n".join(name_list) 
-            
+            combined_label = "\n".join(name_list)
+
             # Add the combined label (if it exists)
             vis.add_3d_label(bbox.get_center(), combined_label)
 
@@ -259,7 +373,7 @@ class QueryObjects(BaseMapEngine):
             if data["present"]:
                 p_id = data["map_object_id"]
                 bbox = self.bbox[p_id]
-                bbox.color = [1, 0, 0]  
+                bbox.color = [1, 0, 0]
 
                 # Add Geometry
                 vis.add_geometry(f"pickup_{p_id}", bbox)

@@ -4,6 +4,8 @@ version = "0.0.0"
 dependencies = [
     "torch",
     "torchvision",
+    "jax",
+    "polars",
     "open3d",
     "hydra-core",
     "mobile_sam@git+https://github.com/ChaoningZhang/MobileSAM.git",

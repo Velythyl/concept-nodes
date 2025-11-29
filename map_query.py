@@ -40,8 +40,8 @@ def main(cfg: DictConfig):
     # Run Query Logic
     results = engine.process_queries(queries=queries)
 
-    output_path = Path(map_path) / "query_results.json"
-    engine.save_results(results, output_path=output_path)
+    output_path = Path(map_path) / "assignments"
+    engine.save_results(results, output_path=output_path, sssd_data=dataset.sssd_data)
     log.info(f"Results saved to {output_path}")
 
     if cfg.debug:

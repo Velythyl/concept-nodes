@@ -5,7 +5,7 @@ defaults:
   - _self_
 
 name: cg-detector
-sim_thresh: 0.85
+sim_thresh: 0.90
 overlap_eps: 0.025
 voxel_size: 0.025
 denoising_eps: 0.1
