@@ -17,7 +17,12 @@ log = logging.getLogger(__name__)
 
 class QueryObjects(BaseMapEngine):
     def __init__(
-        self, verifier: OpenAIVerifier, receptacles_bbox: Dict, pickupable_to_receptacles: Dict, top_k: int = 5, **kwargs
+        self,
+        verifier: OpenAIVerifier,
+        receptacles_bbox: Dict,
+        pickupable_to_receptacles: Dict,
+        top_k: int = 5,
+        **kwargs,
     ):
         super().__init__(**kwargs)
         self.verifier = verifier
@@ -36,6 +41,9 @@ class QueryObjects(BaseMapEngine):
         receptacle_to_map: Dict[str, int] = {}
 
         for receptacle_key, rec_data in self.receptacles_bbox.items():
+            if receptacle_key == "OOB_FAKE_RECEPTACLE":
+                receptacle_to_map[receptacle_key] = None
+                continue
             corner_points = rec_data["cornerPoints"]
 
             # corner_points is already a list of 8 [x, y, z] points
@@ -54,7 +62,7 @@ class QueryObjects(BaseMapEngine):
                     best_idx = idx
 
             receptacle_to_map[receptacle_key] = best_idx
-
+        
         return receptacle_to_map
 
     def find_receptacle(
@@ -77,9 +85,7 @@ class QueryObjects(BaseMapEngine):
             rec_x, rec_y, rec_z = c["x"], c["y"], c["z"]
 
             # Calculate squared Euclidean distance (faster than sqrt)
-            dist_sq = (
-                (obj_x - rec_x) ** 2 + (obj_y - rec_y) ** 2 + (obj_z - rec_z) ** 2
-            )
+            dist_sq = (obj_x - rec_x) ** 2 + (obj_y - rec_y) ** 2 + (obj_z - rec_z) ** 2
 
             if dist_sq < min_dist_sq:
                 min_dist_sq = dist_sq
@@ -191,7 +197,6 @@ class QueryObjects(BaseMapEngine):
                     # 4. Spatial Association: which receptacle does it belong to now?
                     # NOTE from @kumaradityag: It is possible that the rec_name is not the correct receptacle, if the incorrect object was retrieved
                     centroid = obj_data["centroid"]
-                    # TODO: this should use the map bbox
                     rec_name = self.find_receptacle(centroid, self.receptacles_bbox)
 
                     result_entry["present"] = True
@@ -205,39 +210,67 @@ class QueryObjects(BaseMapEngine):
         return results
 
     def visualize(self, res_path: str):
-        """Visualize all object point clouds with labels in an Open3D window."""
-        geometries = []
-        
-        # Add all point clouds
-        for pcd in self.pcd:
-            geometries.append(pcd)
+        """Visualize all object point clouds with labels using O3DVisualizer."""
+        import open3d.visualization.gui as gui
 
-        # Read result json file
-        with open(res_path, 'r') as f:
+        # 1. Initialize Application and Visualizer
+        app = gui.Application.instance
+        app.initialize()
+
+        vis = o3d.visualization.O3DVisualizer("Map Objects Visualization", 1024, 768)
+        vis.set_background([1.0, 1.0, 1.0, 1.0], bg_image=None)
+        vis.show_settings = True
+        vis.show_skybox(False)
+        vis.enable_raw_mode(True)
+
+        # 2. Add Point Clouds
+        for i, pcd in enumerate(self.pcd):
+            vis.add_geometry(f"pcd_{i}", pcd)
+
+        # 3. Load Results
+        with open(res_path, "r") as f:
             results = json.load(f)
 
-        # Get pickupables
-        pickupable_ids = []
-        for _, val in results.items():
-            if val['present']:
-                pickupable_ids.append(val['map_object_id'])
-        
-        bboxes = [self.bbox[idx] for idx in pickupable_ids]
-        
-        # Add bounding boxes
-        for bbox in bboxes:
-            # Assign random color
-            color = np.random.rand(3)
-            bbox.color = color.tolist()
-            geometries.append(bbox)
-        
-        # Visualize
-        o3d.visualization.draw_geometries(
-            geometries,
-            window_name="Map Objects Visualization",
-            width=1024,
-            height=768,
-        )
+        # --- Pre-processing: Group names by map_id ---
+        id_to_names = {}
+        for r_name, map_id in self.receptacle_map_ids.items():
+            if map_id is None:
+                continue
+            if map_id not in id_to_names:
+                id_to_names[map_id] = []
+            id_to_names[map_id].append(r_name)
+
+        # 4. Add Receptacles (with Labels)
+        for map_id, name_list in id_to_names.items():
+            bbox = self.bbox[map_id]
+            bbox.color = [0, 0, 0]
+
+            # Add Geometry only once per ID - happens if a receptacle has multiple names
+            vis.add_geometry(f"receptacle_{map_id}", bbox)
+
+            # Combine names into one string
+            combined_label = "\n".join(name_list) 
+            
+            # Add the combined label (if it exists)
+            vis.add_3d_label(bbox.get_center(), combined_label)
+
+        # 5. Add Pickupables (with Labels)
+        for p_name, data in results.items():
+            if data["present"]:
+                p_id = data["map_object_id"]
+                bbox = self.bbox[p_id]
+                bbox.color = [1, 0, 0]  
+
+                # Add Geometry
+                vis.add_geometry(f"pickup_{p_id}", bbox)
+
+                # Add Label
+                vis.add_3d_label(bbox.get_center(), f" {p_name} ")
+
+        # 6. Run Visualization
+        vis.reset_camera_to_default()
+        app.add_window(vis)
+        app.run()
 
 
 class QueryReceptacles(QueryObjects):
@@ -308,12 +341,14 @@ class QueryReceptacles(QueryObjects):
                     extent = bbox.extent
 
                     objects_id.append(idx)
-                    bboxes.append({
+                    bboxes.append(
+                        {
                             "center": center.tolist(),
                             "rotation": rotation.flatten().tolist(),
                             "extent": extent.tolist(),
                             "vertices": [v.tolist() for v in vertices],
-                        })
+                        }
+                    )
 
                     found_details = {
                         "present": True,
@@ -330,30 +365,30 @@ class QueryReceptacles(QueryObjects):
     def visualize(self, res_path: str):
         """Visualize all object point clouds with labels in an Open3D window."""
         geometries = []
-        
+
         # Add all point clouds
         for pcd in self.pcd:
             geometries.append(pcd)
 
         # Read result json file
-        with open(res_path, 'r') as f:
+        with open(res_path, "r") as f:
             results = json.load(f)
 
         # Get pickupables
         receptacle_ids = []
         for _, val in results.items():
-            if val['present']:
-                receptacle_ids.extend(val['map_object_id'])
-    
+            if val["present"]:
+                receptacle_ids.extend(val["map_object_id"])
+
         bboxes = [self.bbox[idx] for idx in receptacle_ids]
-        
+
         # Add bounding boxes
         for bbox in bboxes:
             # Assign random color
             color = np.random.rand(3)
             bbox.color = color.tolist()
             geometries.append(bbox)
-        
+
         # Visualize
         o3d.visualization.draw_geometries(
             geometries,
