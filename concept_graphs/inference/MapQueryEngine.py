@@ -25,7 +25,6 @@ class QueryObjects(BaseMapEngine):
         self.pickupable_to_receptacles = pickupable_to_receptacles
         self.top_k = top_k
         self.receptacle_map_ids = self.get_receptacle_map_ids()
-        #{'TVStand|7|0|0___0': 33, 'TVStand|4|4|0___0': None, 'SideTable|4|3': 0, 'DiningTable|6|3|0': 18}
 
     def get_receptacle_map_ids(self) -> Dict[str, int]:
         """
@@ -41,8 +40,6 @@ class QueryObjects(BaseMapEngine):
 
             # corner_points is already a list of 8 [x, y, z] points
             rec_corners = np.array(corner_points, dtype=np.float32)
-            # Negate ya-xis
-            rec_corners[:, 1] = -rec_corners[:, 1]
 
             best_iou = 0.0
             best_idx: Optional[int] = None
@@ -77,8 +74,7 @@ class QueryObjects(BaseMapEngine):
 
         for rec_name, rec_data in receptacles.items():
             c = rec_data["center"]
-            # Note: Negate y-axis to be RH frame
-            rec_x, rec_y, rec_z = c["x"], -c["y"], c["z"]
+            rec_x, rec_y, rec_z = c["x"], c["y"], c["z"]
 
             # Calculate squared Euclidean distance (faster than sqrt)
             dist_sq = (
