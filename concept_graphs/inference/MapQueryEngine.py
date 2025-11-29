@@ -24,8 +24,8 @@ class QueryObjects(BaseMapEngine):
         self.receptacles_bbox = receptacles_bbox
         self.pickupable_to_receptacles = pickupable_to_receptacles
         self.top_k = top_k
-        self.pickupable_to_receptacles = pickupable_to_receptacles
         self.receptacle_map_ids = self.get_receptacle_map_ids()
+        #{'TVStand|7|0|0___0': 33, 'TVStand|4|4|0___0': None, 'SideTable|4|3': 0, 'DiningTable|6|3|0': 18}
 
     def get_receptacle_map_ids(self) -> Dict[str, int]:
         """
@@ -41,6 +41,8 @@ class QueryObjects(BaseMapEngine):
 
             # corner_points is already a list of 8 [x, y, z] points
             rec_corners = np.array(corner_points, dtype=np.float32)
+            # Negate ya-xis
+            rec_corners[:, 1] = -rec_corners[:, 1]
 
             best_iou = 0.0
             best_idx: Optional[int] = None
@@ -75,10 +77,12 @@ class QueryObjects(BaseMapEngine):
 
         for rec_name, rec_data in receptacles.items():
             c = rec_data["center"]
+            # Note: Negate y-axis to be RH frame
+            rec_x, rec_y, rec_z = c["x"], -c["y"], c["z"]
 
             # Calculate squared Euclidean distance (faster than sqrt)
             dist_sq = (
-                (obj_x - c["x"]) ** 2 + (obj_y - c["y"]) ** 2 + (obj_z - c["z"]) ** 2
+                (obj_x - rec_x) ** 2 + (obj_y - rec_y) ** 2 + (obj_z - rec_z) ** 2
             )
 
             if dist_sq < min_dist_sq:
@@ -191,6 +195,7 @@ class QueryObjects(BaseMapEngine):
                     # 4. Spatial Association: which receptacle does it belong to now?
                     # NOTE from @kumaradityag: It is possible that the rec_name is not the correct receptacle, if the incorrect object was retrieved
                     centroid = obj_data["centroid"]
+                    # TODO: this should use the map bbox
                     rec_name = self.find_receptacle(centroid, self.receptacles_bbox)
 
                     result_entry["present"] = True
