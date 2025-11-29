@@ -20,8 +20,10 @@ def main(cfg: DictConfig):
     # Get inputs
     if cfg.name == "verifier":
         queries = dataset.get_pickupable_names()
+        p2r_map = dataset.get_pickupable_to_receptacles()
     elif cfg.name == "map_receptacles":
         queries = dataset.get_receptacles_names()
+        p2r_map = None
 
     map_path = cfg.map_path
 
@@ -32,6 +34,7 @@ def main(cfg: DictConfig):
         semantic_sim_metric=semantic_sim,
         verifier=verifier,
         receptacles_bbox=dataset.get_receptacles_bbox(),
+        pickupable_to_receptacles=p2r_map,
     )
 
     # Run Query Logic

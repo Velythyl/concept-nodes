@@ -8,7 +8,7 @@ from tqdm import tqdm
 import open3d as o3d
 
 from concept_graphs.vlm.OpenAIVerifier import OpenAIVerifier
-from concept_graphs.utils import split_camel_preserve_acronyms
+from concept_graphs.utils import split_camel_preserve_acronyms, aabb_iou
 
 from .BaseMapEngine import BaseMapEngine
 
@@ -17,12 +17,46 @@ log = logging.getLogger(__name__)
 
 class QueryObjects(BaseMapEngine):
     def __init__(
-        self, verifier: OpenAIVerifier, receptacles_bbox: Dict, top_k: int = 5, **kwargs
+        self, verifier: OpenAIVerifier, receptacles_bbox: Dict, pickupable_to_receptacles: Dict, top_k: int = 5, **kwargs
     ):
         super().__init__(**kwargs)
         self.verifier = verifier
         self.receptacles_bbox = receptacles_bbox
+        self.pickupable_to_receptacles = pickupable_to_receptacles
         self.top_k = top_k
+        self.pickupable_to_receptacles = pickupable_to_receptacles
+        self.receptacle_map_ids = self.get_receptacle_map_ids()
+
+    def get_receptacle_map_ids(self) -> Dict[str, int]:
+        """
+        For each receptacle OOBB (given as 8 corner points), find the map
+        object id whose bounding box has the highest IoU with it.
+        """
+        # self.receptacles_bbox[receptacle_key]["cornerPoints"] is a list of 8 points
+
+        receptacle_to_map: Dict[str, int] = {}
+
+        for receptacle_key, rec_data in self.receptacles_bbox.items():
+            corner_points = rec_data["cornerPoints"]
+
+            # corner_points is already a list of 8 [x, y, z] points
+            rec_corners = np.array(corner_points, dtype=np.float32)
+
+            best_iou = 0.0
+            best_idx: Optional[int] = None
+
+            # Iterate over all map bboxes
+            for idx, bbox in enumerate(self.bbox):
+                # bbox is expected to be an Open3D OrientedBoundingBox
+                box_points = np.asarray(bbox.get_box_points(), dtype=np.float32)
+                iou = aabb_iou(rec_corners, box_points)
+                if iou > best_iou:
+                    best_iou = iou
+                    best_idx = idx
+
+            receptacle_to_map[receptacle_key] = best_idx
+
+        return receptacle_to_map
 
     def find_receptacle(
         self, object_centroid: List[float], receptacles: Dict
@@ -54,7 +88,26 @@ class QueryObjects(BaseMapEngine):
         return closest_rec
 
     def process_queries(self, queries: List[str], **kwargs) -> Dict:
-        results = {}
+        """
+        Returns:
+        {
+          "query_text": {
+              "present": bool,
+              "map_object_id": int | None,
+              "query_timestamp": List[float],
+              "present_receptacle_name": str | None,
+              "receptacles": [
+                    {
+                        "receptacle_name": str,
+                        "map_object_id": int,
+                        "receptacle_timestamps": List[float],
+                    },
+                    ...
+                ]
+            }
+        }
+        """
+        results: Dict[str, Dict] = {}
 
         log.info("Encoding queries...")
         # Encode queries -> (num_queries, feature_dim)
@@ -70,7 +123,6 @@ class QueryObjects(BaseMapEngine):
             query_feat = text_features[i].unsqueeze(0)  # (1, dim)
 
             # Calculate similarity against all map objects
-            # sim shape: (1, num_objects) -> squeeze to (num_objects)
             query_feat = query_feat.to(self.device)
             features = self.features.to(self.device)
             sim_scores = self.semantic_sim(query_feat, features).squeeze().cpu()
@@ -79,14 +131,46 @@ class QueryObjects(BaseMapEngine):
             top_k_indices = torch.argsort(sim_scores, descending=True)[: self.top_k]
             top_k_indices = top_k_indices.cpu().numpy()
 
-            found_details = {
+            # Initialize output structure for this query
+            result_entry = {
                 "present": False,
-                "receptacle": None,
-                "timestamps": [],
                 "map_object_id": None,
+                "query_timestamp": [],
+                "present_receptacle_name": None,
+                "receptacles": [],
             }
 
-            # 3. Verify candidates
+            # build receptacles list from mapping
+            receptacle_names = self.pickupable_to_receptacles[query_text]
+            for rec_name in receptacle_names:
+                if rec_name == "OOB_FAKE_RECEPTACLE":
+                    continue
+
+                # Map name -> map object id
+                rec_map_id = self.receptacle_map_ids[rec_name]
+                if rec_map_id is None:
+                    # In case the receptacle was not mapped properly
+                    # We still include the receptacle but without timestamps
+                    result_entry["receptacles"].append(
+                        {
+                            "receptacle_name": rec_name,
+                            "map_object_id": None,
+                            "receptacle_timestamps": [],
+                        }
+                    )
+                    continue
+
+                rec_timestamps = self.annotations[rec_map_id]["timestamps"]
+
+                result_entry["receptacles"].append(
+                    {
+                        "receptacle_name": rec_name,
+                        "map_object_id": rec_map_id,
+                        "receptacle_timestamps": rec_timestamps,
+                    }
+                )
+
+            # 3. Verify candidates to find where the pickupable currently is
             for idx in top_k_indices:
                 idx = int(idx)  # Ensure python int
                 obj_data = self.annotations[idx]
@@ -104,20 +188,18 @@ class QueryObjects(BaseMapEngine):
                 is_match = self.verifier(images, query_text_cleaned)
 
                 if is_match:
-                    # 4. Spatial Association
+                    # 4. Spatial Association: which receptacle does it belong to now?
+                    # NOTE from @kumaradityag: It is possible that the rec_name is not the correct receptacle, if the incorrect object was retrieved
                     centroid = obj_data["centroid"]
                     rec_name = self.find_receptacle(centroid, self.receptacles_bbox)
 
-                    found_details = {
-                        "present": True,
-                        "receptacle": rec_name,
-                        "timestamps": obj_data.get("timestamps", []),
-                        "map_object_id": idx,
-                    }
-
+                    result_entry["present"] = True
+                    result_entry["map_object_id"] = idx
+                    result_entry["query_timestamp"] = obj_data.get("timestamps", [])
+                    result_entry["present_receptacle_name"] = rec_name
                     break
 
-            results[query_text] = found_details
+            results[query_text] = result_entry
 
         return results
 
