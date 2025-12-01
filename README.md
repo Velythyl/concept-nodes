@@ -5,6 +5,14 @@ Reimplementation of some ConceptGraphs functionalities. Check out [our website](
 
 Please note that this codebase does not support the edges presented in the paper.
 
+# UV Install
+Clone repository and submodules
+```bash
+git clone --recurse-submodules git@github.com:kumaradityag/perpetua-concept-nodes
+```
+
+That's it. **If you do this, ignore the following install section.**
+
 # Install
 Clone repository and submodules
 ```bash
@@ -65,6 +73,8 @@ version of the Replica dataset, try
 
 ```bash
 python3 main.py algo=CGDetector dataset=Replica_low sim_thresh=0.89
+# Or with uv
+uv run python main.py algo=CGDetector dataset=Replica_low sim_thresh=0.89
 ```
 The map and other assets will be saved to `output_dir`. `main.py` will also create
 a symlink to the latest output in `output_dir/latest_map`.
@@ -97,10 +107,14 @@ The above list only includes the most common arguments. If you understand [Hydra
 To visualize the latest map with Open3D (`output_dir/latest_map`), use
 ```bash
 python3 visualizer.py
+# Or with uv
+uv run python visualizer.py
 ```
 or provide your own `$MAP_PATH`
 ```bash
 python3 visualizer.py map_path=$MAP_PATH
+# Or with uv
+uv run python visualizer.py map_path=$MAP_PATH
 ```
 
 Various options and colorings are available in the panel
