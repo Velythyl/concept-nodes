@@ -17,6 +17,7 @@ dependencies = [
     "einops",
     "decord",
     "pycocotools",
+    "rgbd-dataset",
 ]
 requires-python = ">=3.10"
 
@@ -26,3 +27,18 @@ dev = ["black"]
 
 [tool.setuptools]
 py-modules = []
+
+[tool.uv.workspace]
+members = [
+    "rgbd_dataset",
+    ".",
+]
+
+[tool.uv.sources]
+rgbd-dataset = { workspace = true, editable = true }
+concept-graphs = { workspace = true, editable = true }
+
+[dependency-groups]
+dev = [
+    "concept-graphs",
+]

@@ -22,3 +22,4 @@ rgb_dir: rgb_first_view
 depth_dir: depth
 semantics_dir: semantics
 pose_dir: poses
+cam_offset: 0.675  # Dataset dependant
