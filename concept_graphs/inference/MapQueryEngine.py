@@ -79,18 +79,17 @@ class QueryObjects(BaseMapEngine):
         if not receptacles:
             return None
 
-        obj_x, obj_y, obj_z = object_centroid
+        map_point = np.array(object_centroid)
 
         closest_rec = None
         min_dist_sq = float("inf")
         # TODO: make assignment not based on centroid but being on centroid or overelapping bbox
 
         for rec_name, rec_data in receptacles.items():
-            c = rec_data["center"]
-            rec_x, rec_y, rec_z = c["x"], c["y"], c["z"]
+            corners = rec_data["cornerPoints"]
+            rec_center = np.mean(np.array(corners), axis=0)
 
-            # Calculate squared Euclidean distance (faster than sqrt)
-            dist_sq = (obj_x - rec_x) ** 2 + (obj_y - rec_y) ** 2 + (obj_z - rec_z) ** 2
+            dist_sq = np.linalg.norm(map_point - rec_center) ** 2
 
             if dist_sq < min_dist_sq:
                 min_dist_sq = dist_sq
