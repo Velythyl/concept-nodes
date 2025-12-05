@@ -111,6 +111,7 @@ class SAM3(SegmentationModel):
         return prompts
 
     def __call__(self, img: np.ndarray):
+        self.counter = 0
         with torch.inference_mode(), torch.no_grad():
             pil_img = Image.fromarray(img)
             all_prompts = self.prompts
@@ -161,5 +162,4 @@ class SAM3(SegmentationModel):
             boxes = boxes.round().int()
             classes = classes.int()
 
-            self.counter = 0
             return masks, boxes, scores, classes
