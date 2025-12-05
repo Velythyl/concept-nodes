@@ -18,6 +18,7 @@ dependencies = [
     "decord",
     "pycocotools",
     "rgbd-dataset",
+    "ipdb>=0.13.13",
 ]
 requires-python = ">=3.10"
 

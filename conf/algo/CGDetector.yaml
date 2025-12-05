@@ -17,6 +17,9 @@ mapping:
   object_factory:
     _target_: concept_graphs.mapping.Object.RunningAverageObjectFactory
     semantic_mode: mean
+  similarity:
+    geometric_similarity:
+      agg: dice
   n_min_segments: 3
   grace_min_segments: 30
   filter_min_every: 10

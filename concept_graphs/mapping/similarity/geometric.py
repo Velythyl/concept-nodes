@@ -38,6 +38,7 @@ class PointCloudOverlapClosestK(GeometricSimilarity):
         closest_k = torch.topk(dist_centroids, k=k, dim=0, largest=False).indices.T
         result = torch.zeros_like(dist_centroids)
 
+
         for other_i, other_pcd_i in enumerate(other_pcd):
             indices = closest_k[other_i]
             for main_i in indices:
@@ -58,13 +59,18 @@ class PointCloudOverlapClosestK(GeometricSimilarity):
                     sim = (sim1 + sim2) / 2
                 elif self.agg == "max":
                     sim = torch.max(sim1, sim2)
+                elif self.agg == "min":
+                    # Both objects must cover each other e.g., remote and large table will fail
+                    sim = torch.min(sim1, sim2)
+                elif self.agg == "dice":
+                    # Harmonic mean (dice coefficient) - soft version of mean
+                    sim = (2 * sim1 * sim2) / (sim1 + sim2 + 1e-6)
                 elif self.agg == "other":
                     sim = sim2
                 else:
                     raise ValueError(f"Unknown aggregation method {self.agg}")
 
                 result[main_i, other_i] = sim
-
         return result
   
 
