@@ -53,9 +53,9 @@ class PerceptionPipeline:
     def __call__(
         self, rgb: np.ndarray, depth: np.ndarray, intrinsics: np.ndarray, camera_pose: np.ndarray,
     ) -> Dict[str, Union[np.ndarray, List[np.ndarray]]]:
-        object_masks, bbox, conf = self.segmentation_model(rgb)
+        object_masks, bbox, conf, labels = self.segmentation_model(rgb)
 
-        if object_masks is None or bbox is None or conf is None:
+        if object_masks is None or bbox is None or conf is None or labels is None:
             return None
 
         # Penalty if original bbox touches image border
@@ -75,10 +75,11 @@ class PerceptionPipeline:
         if self.mask_subtract_contained:
             object_masks = mask_subtract_contained(bbox, object_masks)
 
-        object_masks, bbox, conf = (
+        object_masks, bbox, conf, labels = (
             object_masks.cpu().numpy(),
             bbox.cpu().numpy(),
             conf.cpu().numpy(),
+            labels.cpu().numpy(),
         )
 
         areas = object_masks.sum(axis=-1).sum(axis=-1)
@@ -99,7 +100,7 @@ class PerceptionPipeline:
 
         # Segment filtering
         keep = areas > self.min_mask_area_px
-        object_masks, bbox, scores = object_masks[keep], bbox[keep], scores[keep]
+        object_masks, bbox, scores, labels = object_masks[keep], bbox[keep], scores[keep], labels[keep]
 
         if len(object_masks) == 0:
             return None
@@ -131,9 +132,10 @@ class PerceptionPipeline:
         if self.debug_images:
             from concept_graphs.viz.segmentation import plot_segments
             import matplotlib.pyplot as plt
+            class_names = np.array(self.segmentation_model.classes)
 
             img_name = str(self.debug_counter).zfill(7) + ".png"
-            plot_segments(rgb, torch.from_numpy(object_masks))
+            plot_segments(rgb, torch.from_numpy(object_masks), class_names=class_names[labels])
             plt.savefig(self.debug_dir / "segments" / img_name)
             plt.close()
             self.debug_counter += 1
@@ -147,6 +149,7 @@ class PerceptionPipeline:
             point_map_crops=filter_list(point_map_crops, keep),
             features=features[keep],
             scores=scores[keep],
+            labels=labels[keep],    
             camera_pose=camera_pose,
         )
 

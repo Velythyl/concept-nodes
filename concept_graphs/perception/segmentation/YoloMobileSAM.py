@@ -29,6 +29,7 @@ class YoloMobileSAM(SegmentationModel):
         sam_device: str,
         debug_images: bool,
         debug_dir: str = ".",
+        threshold: float = 0.5,
     ):
         self.yolo_checkpoint_path = yolo_checkpoint_path
         self.yolo_class_path = yolo_class_path
@@ -40,6 +41,7 @@ class YoloMobileSAM(SegmentationModel):
         self.debug_images = debug_images
         self.debug_dir = Path(debug_dir)
         self.debug_counter = 0
+        self.threshold = threshold
 
         # YOLO
         with open(self.yolo_class_path, "r") as f:
@@ -68,6 +70,11 @@ class YoloMobileSAM(SegmentationModel):
             yolo_output = self.yolo.predict(img_bgr, verbose=False)
 
             bbox = yolo_output[0].boxes.xyxy.cpu().numpy()
+            # Filter boxes with low confidence
+            scores = yolo_output[0].boxes.conf.cpu().numpy()
+            keep = scores >= self.threshold
+            bbox = bbox[keep]
+            labels = yolo_output[0].boxes.cls[keep]
 
             bbox_transformed = self.sam_predictor.transform.apply_boxes(
                 bbox, original_size=img.shape[:2]
@@ -77,7 +84,7 @@ class YoloMobileSAM(SegmentationModel):
             )
 
             if len(bbox) == 0:
-                return None, None, None
+                return None, None, None, None
 
             self.sam_predictor.set_image(img)
             if self.sam_prompting == "bbox":
@@ -92,7 +99,7 @@ class YoloMobileSAM(SegmentationModel):
                 masks, iou_predictions, _ = self.sam_predictor.predict_torch(
                     point_coords=bbox_center.unsqueeze(1),
                     point_labels=torch.ones(bbox_center.size(0), 1).to(self.sam_device),
-                    multimask_output=True,
+                    multimask_output=True,  
                 )
             else:
                 raise ValueError(f"Unknown prompting type: {self.sam_prompting}")
@@ -103,6 +110,7 @@ class YoloMobileSAM(SegmentationModel):
                 torch.arange(iou_predictions.size(0)), best
             ]
             bbox = torch.from_numpy(bbox).to(torch.int)
+            labels = labels.to(torch.int)
 
         if self.debug_images:
             img_name = str(self.debug_counter).zfill(7) + ".png"
@@ -113,4 +121,4 @@ class YoloMobileSAM(SegmentationModel):
             )
             self.debug_counter += 1
 
-        return masks, bbox, iou_predictions
+        return masks, bbox, iou_predictions, labels

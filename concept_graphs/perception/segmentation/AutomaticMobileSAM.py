@@ -56,4 +56,4 @@ class AutomaticMobileSAM(SegmentationModel):
         masks, bbox, score = torch.stack(masks), torch.stack(bbox), torch.tensor(score)
         bbox = box_xywh_to_xyxy(bbox)
 
-        return masks, bbox, score
+        return masks, bbox, score, torch.arange(len(score), dtype=torch.int64)

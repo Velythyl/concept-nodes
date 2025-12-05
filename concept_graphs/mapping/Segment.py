@@ -10,6 +10,7 @@ class Segment:
         point_map: np.ndarray,
         semantic_ft: np.ndarray,
         score: float,
+        label: int,
         camera_pose: np.ndarray,
     ):
         self.rgb = rgb
@@ -18,6 +19,7 @@ class Segment:
         self.semantic_ft = semantic_ft
         self.score = score
         self.camera_pose = camera_pose
+        self.label = label  
         self.id = uuid.uuid4()
 
     @property

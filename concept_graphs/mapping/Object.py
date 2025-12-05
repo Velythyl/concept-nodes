@@ -16,6 +16,7 @@ class Object:
         point_map: np.ndarray,
         semantic_ft: np.ndarray,
         camera_pose: np.ndarray,
+        label: np.ndarray,
         segment_heap_size: int,
         semantic_mode: str,
         timestep_created: int,
@@ -49,6 +50,7 @@ class Object:
             semantic_ft=semantic_ft,
             camera_pose=camera_pose,
             score=score,
+            label=label,
         )
         self.segments.push(segment)
 
@@ -69,6 +71,10 @@ class Object:
         self.is_collated = True
 
         self.id = uuid.uuid4()
+
+    @property
+    def labels(self):
+        return [s.label for s in self.segments]
 
     def __repr__(self):
         return f"Object with {len(self.segments)} segments. Detected a total of {self.n_segments} times."

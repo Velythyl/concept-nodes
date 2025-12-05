@@ -67,6 +67,10 @@ class SAM3(SegmentationModel):
         self.prompts = self.load_text_prompts(queries_path)
         self.batch_size = sam_batch_size
 
+    @property
+    def classes(self):
+        return self.prompts
+
     def create_empty_datapoint(self) -> Datapoint:
         """A datapoint is a single image on which we can apply several queries at once."""
         return Datapoint(find_queries=[], images=[])
@@ -111,7 +115,7 @@ class SAM3(SegmentationModel):
             pil_img = Image.fromarray(img)
             all_prompts = self.prompts
 
-            masks_list, boxes_list, scores_list = [], [], []
+            masks_list, boxes_list, scores_list, classes_list = [], [], [], []
 
             if self.batch_size == -1:
                 self.batch_size = len(all_prompts)
@@ -134,22 +138,28 @@ class SAM3(SegmentationModel):
                     outputs, batch.find_metadatas
                 )
 
-                for _, processed in results.items():
+                for id, processed in results.items():
+                    n_detections = processed["masks"].shape[0]
+                    if n_detections == 0:
+                        continue
                     masks_list.append(processed["masks"].squeeze(1).cpu())
                     boxes_list.append(processed["boxes"].cpu())
                     scores_list.append(processed["scores"].cpu())
+                    classes_list.extend([id] * n_detections)
 
                 del batch, outputs, results, datapoint
                 torch.cuda.empty_cache()
 
             if len(masks_list) == 0:
-                return None, None, None
+                return None, None, None, None
 
             masks = torch.cat(masks_list, dim=0)
             boxes = torch.cat(boxes_list, dim=0)
             scores = torch.cat(scores_list, dim=0)
+            classes = torch.tensor(classes_list, dtype=torch.int)
 
             boxes = boxes.round().int()
+            classes = classes.int()
 
             self.counter = 0
-            return masks, boxes, scores
+            return masks, boxes, scores, classes

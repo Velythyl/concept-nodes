@@ -157,6 +157,7 @@ class ObjectMap:
         features: np.ndarray,
         scores: np.ndarray,
         camera_pose: np.ndarray,
+        labels: np.ndarray,
         timestamp: float = None,
     ):
         n_objects = len(rgb_crops)
@@ -166,6 +167,7 @@ class ObjectMap:
             == len(point_map_crops)
             == len(features)
             == len(scores)
+            == len(labels)
         )
 
         for i in range(len(rgb_crops)):
@@ -174,6 +176,7 @@ class ObjectMap:
                 mask=mask_crops[i],
                 point_map=point_map_crops[i],
                 semantic_ft=np.copy(features[i]),
+                label=int(labels[i]),
                 camera_pose=camera_pose,
                 score=float(scores[i]),
                 timestep_created=self.n_updates,
@@ -359,6 +362,7 @@ class ObjectMap:
                 ],
                 centroid=np.mean(np.asarray(obj.pcd.points), axis=0).tolist(),
                 timestamps=[float(t) for t in obj.timestamps],
+                labels=[int(l) for l in obj.labels],
             )
             annotations.append(obj_ann)
             point_counter += n_points_object

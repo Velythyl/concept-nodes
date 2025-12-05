@@ -46,17 +46,38 @@ def plot_grid_images(
     plt.tight_layout()
 
 
-def plot_segments(image: np.ndarray, masks: torch.Tensor) -> None:
+def plot_segments(image: np.ndarray, masks: torch.Tensor, class_names: np.ndarray) -> None:
     image = torchvision.transforms.ToTensor()(image)
     np.random.seed(42)
     random_colors = [
         (r, g, b) for r, g, b in (255 * torch.rand((masks.shape[0], 3))).int()
     ]
     img_with_segmentations = torchvision.utils.draw_segmentation_masks(
-        image, masks, colors=random_colors
+        image, masks, alpha=0.6, colors=random_colors
     )
     plt.axis("off")
     plt.imshow(F.to_pil_image(img_with_segmentations))
+    # Draw class labels at the center of each mask
+    for i, mask in enumerate(masks):
+        if mask.sum() == 0:
+            continue
+        y_coords, x_coords = torch.where(mask > 0)
+        center_x = x_coords.float().mean().item()
+        center_y = y_coords.float().mean().item()
+        
+        label = str(class_names[i])
+
+        plt.text(
+            center_x, 
+            center_y, 
+            label, 
+            color='white', 
+            fontsize=8, 
+            fontweight='bold',
+            ha='center', 
+            va='center',
+            bbox=dict(facecolor='black', alpha=0.5, edgecolor='none', boxstyle='round,pad=0.2')
+        )
 
 
 def plot_segments_similarity(

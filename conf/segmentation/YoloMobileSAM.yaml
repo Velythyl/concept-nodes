@@ -9,3 +9,4 @@ sam_prompting: bbox
 sam_device: ${device}
 debug_images: ${debug}
 debug_dir: ${output_dir}/debug
+threshold: 0.5
