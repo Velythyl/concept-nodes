@@ -34,6 +34,19 @@ class QueryObjects(BaseMapEngine):
         self.pickupable_to_receptacles = pickupable_to_receptacles
         self.top_k = top_k
         self.receptacle_map_ids = self.get_receptacle_map_ids()
+        self.gt_receptacles_aabb = self.compute_receptacles_aabb()
+
+    def compute_receptacles_aabb(self):
+        result = dict()
+        for r_name, r_data in self.receptacles_bbox.items():
+            # These are the cornerPoints of OOBB
+            corners = np.array(r_data["cornerPoints"], dtype=np.float32)
+            oobb = o3d.geometry.OrientedBoundingBox.create_from_points(
+                o3d.utility.Vector3dVector(corners)
+            )
+            aabb = oobb.get_axis_aligned_bounding_box()
+            result[r_name] = aabb
+        return result
 
     def get_receptacle_map_ids(self) -> Dict[str, int]:
         """
@@ -69,6 +82,20 @@ class QueryObjects(BaseMapEngine):
 
         return receptacle_to_map
 
+    def point_to_aabb_distance(self, point: np.ndarray, corners: np.ndarray) -> float:
+        """
+        Computes distance from a point to an axis-aligned bounding box.
+        Returns 0 if inside the box.
+        """
+        b_min = np.min(corners, axis=0)
+        b_max = np.max(corners, axis=0)
+
+        d_vars = np.maximum(0, b_min - point) + np.maximum(0, point - b_max)
+        
+        dist_sq = np.sum(d_vars ** 2)
+
+        return np.sqrt(dist_sq)
+
     def find_receptacle(
         self, object_centroid: List[float], receptacles: Dict
     ) -> Optional[str]:
@@ -82,14 +109,11 @@ class QueryObjects(BaseMapEngine):
         map_point = np.array(object_centroid)
 
         closest_rec = None
-        min_dist_sq = float("inf")
-        # TODO: make assignment not based on centroid but being on centroid or overelapping bbox
+        min_dist_sq = 1.0     # Pickupable has to be at least a meter away from the receptacle
 
         for rec_name, rec_data in receptacles.items():
-            corners = rec_data["cornerPoints"]
-            rec_center = np.mean(np.array(corners), axis=0)
-
-            dist_sq = np.linalg.norm(map_point - rec_center) ** 2
+            corners = np.asarray(rec_data.get_box_points(), dtype=np.float32)
+            dist_sq = self.point_to_aabb_distance(map_point, corners)
 
             if dist_sq < min_dist_sq:
                 min_dist_sq = dist_sq
@@ -201,7 +225,7 @@ class QueryObjects(BaseMapEngine):
                     # 4. Spatial Association: which receptacle does it belong to now?
                     # NOTE from @kumaradityag: It is possible that the rec_name is not the correct receptacle, if the incorrect object was retrieved
                     centroid = obj_data["centroid"]
-                    rec_name = self.find_receptacle(centroid, self.receptacles_bbox)
+                    rec_name = self.find_receptacle(centroid, self.gt_receptacles_aabb)
 
                     result_entry["present"] = True
                     result_entry["map_object_id"] = idx
