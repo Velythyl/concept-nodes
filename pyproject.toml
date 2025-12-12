@@ -4,15 +4,16 @@ version = "0.0.0"
 dependencies = [
     "torch",
     "torchvision",
-    "jax",
+    "jax[cuda12]>=0.6.2",
+    "flax>=0.10.7",
     "polars",
     "open3d",
-    "hydra-core",
+    "hydra-core>=1.3.2",
     "mobile_sam@git+https://github.com/ChaoningZhang/MobileSAM.git",
     "open_clip_torch",
     "ultralytics",
     "openai",
-    "numpy<=1.26.4",
+    "numpy==2.1.2",
     "sam3@git+https://github.com/kumaradityag/sam3.git",
     "einops",
     "decord",
@@ -33,13 +34,16 @@ py-modules = []
 members = [
     "rgbd_dataset",
     ".",
+    "perpetua2",
 ]
 
 [tool.uv.sources]
-rgbd-dataset = { workspace = true, editable = true }
+rgbd-dataset = { workspace = true }
 concept-graphs = { workspace = true, editable = true }
+perpetua2 = { workspace = true }
 
 [dependency-groups]
 dev = [
     "concept-graphs",
+    "perpetua2",
 ]
