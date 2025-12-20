@@ -1,0 +1,27 @@
+_target_: rgbd_dataset.rgbd_dataset.datasets.StrayScannerRGBD.StrayScannerRGBD
+dataset_name: "rgbd"
+base_path: ${data_dir}
+scene: locobot
+width: 1920
+height: 1440
+resized_width: 1920  # Depth is 256; ROSDataset is 640
+resized_height: 1440 # Depth is 192; ROSDataset is 480
+sequence_start: 0
+sequence_end: -1
+sequence_stride: 1
+relative_pose: False
+depth_scale: 1000.0
+point_cloud: false
+depth_trunc: 4.5  # https://github.com/PyojinKim/StrayScannerVisualizer?tab=readme-ov-file effective depth limit is about 4.5m
+rgb_dir: rgb
+depth_dir: depth
+pose_dir: pose
+intrinsics_dir: intrinsics
+pose_dict: false
+
+# specific to stray scanner
+rgb_video_file: rgb.mp4
+pose_file: odometry.csv
+intrinsics_file: camera_matrix.csv
+strayscanner_depth_confidence: 1
+rotate: 0
