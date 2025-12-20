@@ -1,0 +1,39 @@
+defaults:
+  - algo: CGDetector # CG for tower, CGDetector for kitchen and bomb and outside scenes
+  - dataset: StrayScannerRGBD
+  - paths: my_paths
+  - _self_
+
+name: ???
+sim_thresh: 0.8 #
+overlap_eps: 0.01
+voxel_size: 0.005
+denoising_eps: 0.05
+max_points_pcd: 8000
+final_min_segments: 5
+
+
+device: cuda
+debug: true
+caption: false
+tag: false
+save_map: true
+seed: 123
+
+dataloader:
+  _target_:  torch.utils.data.DataLoader
+  batch_size: 1
+  shuffle: false
+  num_workers: 2
+  pin_memory: false
+  collate_fn:
+    _target_: rgbd_dataset.rgbd_dataset.dataloader.collate_fn_np_single_cb
+
+
+dataset:
+  scene: i_big_kitchen
+  sequence_stride: 10
+  strayscanner_depth_confidence: 2
+
+mapping: 
+  min_points_pcd: 10
