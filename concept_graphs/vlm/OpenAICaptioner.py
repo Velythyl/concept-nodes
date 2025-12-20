@@ -27,33 +27,43 @@ class OpenAICaptioner(ImageCaptioner):
             images = images[: self.max_images]
 
         base64_images = self.encode_images(images)
-        messages = [
-            {"role": "system", "content": self.full_system_prompt},
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": self.user_query},
-                    *[
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:image/jpeg;base64,{base64_img}"
-                            },
-                        }
-                        for base64_img in base64_images
-                    ],
-                ],
-            },
-        ]
-        try:
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=messages,
-                temperature=0.0,
-            )
-            response = response.choices[0].message.content
-        except Exception as e:
-            log.warning("Error: Could not generate caption")
-            response = "Invalid"
+        response = call(self.model, base64_images, self.full_system_prompt, self.user_query, self)
 
         return self.postprocess_response(response)
+
+from diskcache import Cache
+cache = Cache('/tmp/openaicaptionercache') # todo cfg.paths.cache_dir)
+    
+
+@cache.memoize(ignore=(4,))
+def call(model, base64_images, full_system_prompt, user_query, self):
+    messages = [
+        {"role": "system", "content": full_system_prompt},
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": user_query},
+                *[
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/jpeg;base64,{base64_img}"
+                        },
+                    }
+                    for base64_img in base64_images
+                ],
+            ],
+        },
+    ]
+    try:
+        response = self.client.chat.completions.create(
+            model=model,
+            messages=messages,
+            temperature=0.0,
+        )
+        response = response.choices[0].message.content
+    except Exception as e:
+        log.warning("Error: Could not generate caption")
+        response = "Invalid"
+
+    return self.postprocess_response(response)

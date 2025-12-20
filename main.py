@@ -18,7 +18,7 @@ import visualizer
 log = logging.getLogger(__name__)
 
 
-@hydra.main(version_base=None, config_path="conf", config_name="main")
+@hydra.main(version_base=None, config_path="conf", config_name="strayscanner")
 def main(cfg: DictConfig):
     set_seed(cfg.seed)
 
@@ -74,6 +74,7 @@ def main(cfg: DictConfig):
     test_unique_segments(main_map)
     log.info("Objects in final map: %d" % n_objects)
     log.info(f"fps: {fps:.2f}")
+    assert n_objects > 0, "No objects found in the map!"
 
     if cfg.caption and hasattr(cfg, "vlm_caption"):
         log.info("Captioning objects...")
