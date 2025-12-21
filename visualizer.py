@@ -8,6 +8,7 @@ from pathlib import Path
 import numpy as np
 import open3d as o3d
 import open3d.visualization.gui as gui
+import open3d.visualization.rendering as rendering
 import copy
 
 from concept_graphs.utils import load_map, set_seed
@@ -73,12 +74,14 @@ class CallbackManager:
         if self.mode == "keycallback":
             for geometry in geometries:
                 vis.add_geometry(geometry)
-        elif self.mode == "gui":
+        elif self.mode in ["gui"]:
             for name, geometry in zip(geometry_names, geometries):
                 vis.add_geometry(name, geometry)
-        elif self.mode == "offline_screenshot":
+        elif self.mode in ["audio", "offline_screenshot"]:
+            if self.mode == "audio":
+                vis = vis.scene
+
             # vis is the OffscreenRenderer.scene
-            import open3d.visualization.rendering as rendering
             for name, geometry in zip(geometry_names, geometries):
                 mat = rendering.MaterialRecord()
                 mat.shader = "defaultUnlit"
@@ -88,7 +91,7 @@ class CallbackManager:
         if self.mode == "keycallback":
             for geometry in geometries:
                 vis.remove_geometry(geometry)
-        elif self.mode in ["gui", "offline_screenshot"]:
+        elif self.mode in ["gui", "audio", "offline_screenshot"]:
             for name in geometry_names:
                 vis.remove_geometry(name)
 
@@ -96,7 +99,7 @@ class CallbackManager:
         if self.mode == "keycallback":
             for geometry in geometries:
                 vis.update_geometry(geometry)
-        elif self.mode in ["gui", "offline_screenshot"]:
+        elif self.mode in ["gui", "audio", "offline_screenshot"]:
             self.remove_geometries(vis, geometry_names, geometries)
             self.add_geometries(vis, geometry_names, geometries)
 
@@ -198,7 +201,7 @@ def load_point_cloud(path):
 
 
 @hydra.main(version_base=None, config_path="conf", config_name="visualizer")
-def main(cfg: DictConfig, offline_screenshots: bool = True):
+def main(cfg: DictConfig):
     set_seed(cfg.seed)
     path = Path(cfg.map_path)
     clip_ft = np.load(path / "clip_features.npy")
@@ -241,9 +244,41 @@ def main(cfg: DictConfig, offline_screenshots: bool = True):
 
         app.add_window(vis)
         app.run()
+    elif cfg.mode == "audio":
+        app = gui.Application.instance
+        app.initialize()
+        window = gui.Application.instance.create_window(
+            "Open3D", 1024, 768)
+        w = window
+
+        # 3D widget
+        _scene = gui.SceneWidget()
+        _scene.scene = rendering.Open3DScene(w.renderer)
+
+        em = w.theme.font_size
+        separation_height = int(round(0.5 * em))
+        _settings_panel = gui.Vert(
+            0, gui.Margins(0.25 * em, 0.25 * em, 0.25 * em, 0.25 * em))
+        _settings_panel.add_child(gui.Label("Rise Orchestration"))
+        _settings_panel.add_fixed(separation_height)
+
+        def _on_layout(layout_context):
+            r = window.content_rect
+            _scene.frame = r
+            width = 17 * layout_context.theme.font_size
+            height = min(
+                r.height,
+                _settings_panel.calc_preferred_size(
+                    layout_context, gui.Widget.Constraints()).height)
+            _settings_panel.frame = gui.Rect(r.get_right() - width, r.y, width, height)
+        w.set_on_layout(_on_layout)
+        w.add_child(_scene)
+        w.add_child(_settings_panel)
+
+        manager.add_geometries(_scene, manager.pcd_names, manager.pcd )
+        app.run()
     
     elif cfg.mode == "offline_screenshot":
-        import open3d.visualization.rendering as rendering
         width, height = 1024, 768
         vis = rendering.OffscreenRenderer(width, height)
         scene = vis.scene

@@ -11,6 +11,7 @@ dependencies = [
     "ultralytics",
     "openai",
     "numpy<=1.26.4",
+    "clip@git+https://github.com/ultralytics/CLIP.git"
 ]
 requires-python = ">=3.10"
 

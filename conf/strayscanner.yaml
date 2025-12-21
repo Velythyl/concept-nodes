@@ -1,7 +1,7 @@
 defaults:
   - algo: CGDetector # CG for tower, CGDetector for kitchen and bomb and outside scenes
   - dataset: StrayScannerRGBD
-  - paths: my_paths
+  - paths: local
   - _self_
 
 name: ???
@@ -13,7 +13,7 @@ max_points_pcd: 8000
 final_min_segments: 5
 
 
-device: cuda
+device: mps
 debug: true
 caption: false
 tag: false
@@ -31,7 +31,7 @@ dataloader:
 
 
 dataset:
-  scene: i_big_kitchen
+  scene: anais
   sequence_stride: 10
   strayscanner_depth_confidence: 2
 

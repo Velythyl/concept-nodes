@@ -12,7 +12,7 @@ denoising_eps: ???
 max_points_pcd: ???
 final_min_segments: ???
 
-device: cuda
+device: cpu
 debug: false
 caption: false
 tag: false

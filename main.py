@@ -9,6 +9,7 @@ import hydra
 from omegaconf import DictConfig, OmegaConf
 from tqdm import tqdm
 
+from concept_graphs.torch_utils import maybe_set_mps_compatibility_flags
 from concept_graphs.utils import set_seed
 from concept_graphs.mapping.utils import test_unique_segments
 
@@ -20,6 +21,7 @@ log = logging.getLogger(__name__)
 
 @hydra.main(version_base=None, config_path="conf", config_name="strayscanner")
 def main(cfg: DictConfig):
+    maybe_set_mps_compatibility_flags(cfg.device)
     set_seed(cfg.seed)
 
     log.info(f"Running algo {cfg.name}...")
@@ -111,10 +113,13 @@ def main(cfg: DictConfig):
     json.dump(stats, open(output_dir_map / "stats.json", "w"))
     
     # Offline visualization of the map
-    viz_cfg = OmegaConf.load("conf/visualizer.yaml")
-    viz_cfg.mode = "offline_screenshot"
-    viz_cfg.map_path = str(output_dir_map)
-    visualizer.main(viz_cfg)
+    try:
+        viz_cfg = OmegaConf.load("conf/visualizer.yaml")
+        viz_cfg.mode = "offline_screenshot"
+        viz_cfg.map_path = str(output_dir_map)
+        visualizer.main(viz_cfg)
+    except RuntimeError as e:
+        log.warning(f"Could not create offline visualizations: {e}")
 
     # Create symlink to latest map
     symlink = output_dir / "latest_map"
