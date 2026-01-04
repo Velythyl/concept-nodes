@@ -31,7 +31,7 @@ log = logging.getLogger(__name__)
 class ViserCallbackManager:
     """Manages point cloud visualizations and callbacks for Viser."""
 
-    def __init__(self, server: viser.ViserServer, pcd_o3d, clip_ft, ft_extractor):
+    def __init__(self, server: viser.ViserServer, pcd_o3d, clip_ft, ft_extractor, segments_anno=None):
         self.server = server
         self.ft_extractor = ft_extractor
 
@@ -62,16 +62,25 @@ class ViserCallbackManager:
         self.pcd_handles = []
         self.bbox_handles = []
         self.centroid_handles = []
+        self.id_handles = []
         self.label_handles = []
+        self.caption_handles = []
 
         # Toggle states
         self.bbox_visible = False
         self.centroid_visible = False
+        self.ids_visible = False
         self.labels_visible = False
+        self.captions_visible = False
         self.current_color_mode = "rgb"  # "rgb", "random", "similarity"
 
         # Current colors (start with original colors)
         self.current_colors = [c.copy() for c in self.og_colors]
+        
+        # Store segment annotations for labels and captions
+        self.segments_anno = segments_anno
+        self.labels = self._extract_labels()
+        self.captions = self._extract_captions()
 
     def _compute_bboxes(self):
         """Compute oriented bounding boxes for each point cloud."""
@@ -98,6 +107,33 @@ class ViserCallbackManager:
                     "rotation": np.eye(3),
                 })
         return bboxes
+    
+    def _extract_labels(self):
+        """Extract labels from segment annotations."""
+        if self.segments_anno is None:
+            return ["" for _ in range(self.num_objects)]
+        
+        labels = []
+        for seg_group in self.segments_anno.get("segGroups", []):
+            label = seg_group.get("label", "")
+            if label == "empty":
+                # Try caption if label is empty
+                label = seg_group.get("caption", "")
+            labels.append(label)
+        
+        return labels
+    
+    def _extract_captions(self):
+        """Extract captions from segment annotations."""
+        if self.segments_anno is None:
+            return ["" for _ in range(self.num_objects)]
+        
+        captions = []
+        for seg_group in self.segments_anno.get("segGroups", []):
+            caption = seg_group.get("caption", "")
+            captions.append(caption)
+        
+        return captions
 
     def add_point_clouds(self):
         """Add all point clouds to the scene."""
@@ -163,12 +199,11 @@ class ViserCallbackManager:
                 (0, 4), (1, 5), (2, 6), (3, 7),  # vertical edges
             ]
 
-            # Create line segments
-            points = []
-            for e1, e2 in edges:
-                points.append(corners_world[e1])
-                points.append(corners_world[e2])
-            points = np.array(points, dtype=np.float32)
+            # Create line segments in shape (N, 2, 3) for N line segments
+            points = np.array([
+                [corners_world[e1], corners_world[e2]]
+                for e1, e2 in edges
+            ], dtype=np.float32)
 
             handle = self.server.scene.add_line_segments(
                 name=f"/bboxes/bbox_{i}",
@@ -205,16 +240,34 @@ class ViserCallbackManager:
             handle.remove()
         self.centroid_handles = []
 
-    def add_labels(self):
-        """Add text labels to the scene."""
-        self.remove_labels()
+    def add_ids(self):
+        """Add text IDs to the scene."""
+        self.remove_ids()
         for i, centroid in enumerate(self.centroids):
             handle = self.server.scene.add_label(
-                name=f"/labels/label_{i}",
+                name=f"/ids/id_{i}",
                 text=str(i),
                 position=centroid.astype(np.float32) + np.array([0, 0, 0.05], dtype=np.float32),
             )
-            self.label_handles.append(handle)
+            self.id_handles.append(handle)
+
+    def remove_ids(self):
+        """Remove all id handles."""
+        for handle in self.id_handles:
+            handle.remove()
+        self.id_handles = []
+
+    def add_labels(self):
+        """Add text labels to the scene."""
+        self.remove_labels()
+        for i, (centroid, label) in enumerate(zip(self.centroids, self.labels)):
+            if label:  # Only add if label is not empty
+                handle = self.server.scene.add_label(
+                    name=f"/labels/label_{i}",
+                    text=label,
+                    position=centroid.astype(np.float32) + np.array([0, 0, 0.1], dtype=np.float32),
+                )
+                self.label_handles.append(handle)
 
     def remove_labels(self):
         """Remove all label handles."""
@@ -238,6 +291,14 @@ class ViserCallbackManager:
             self.add_centroids()
         self.centroid_visible = not self.centroid_visible
 
+    def toggle_ids(self):
+        """Toggle ID visibility."""
+        if self.ids_visible:
+            self.remove_ids()
+        else:
+            self.add_ids()
+        self.ids_visible = not self.ids_visible
+
     def toggle_labels(self):
         """Toggle label visibility."""
         if self.labels_visible:
@@ -245,6 +306,32 @@ class ViserCallbackManager:
         else:
             self.add_labels()
         self.labels_visible = not self.labels_visible
+
+    def add_captions(self):
+        """Add text captions to the scene."""
+        self.remove_captions()
+        for i, (centroid, caption) in enumerate(zip(self.centroids, self.captions)):
+            if caption:  # Only add if caption is not empty
+                handle = self.server.scene.add_label(
+                    name=f"/captions/caption_{i}",
+                    text=caption,
+                    position=centroid.astype(np.float32) + np.array([0, 0, 0.15], dtype=np.float32),
+                )
+                self.caption_handles.append(handle)
+
+    def remove_captions(self):
+        """Remove all caption handles."""
+        for handle in self.caption_handles:
+            handle.remove()
+        self.caption_handles = []
+
+    def toggle_captions(self):
+        """Toggle caption visibility."""
+        if self.captions_visible:
+            self.remove_captions()
+        else:
+            self.add_captions()
+        self.captions_visible = not self.captions_visible
 
     def set_rgb_colors(self):
         """Set original RGB colors."""
@@ -315,7 +402,7 @@ def load_point_cloud(path):
         obj = pcd.select_by_index(ann["segments"])
         pcd_o3d.append(obj)
 
-    return pcd_o3d
+    return pcd_o3d, segments_anno
 
 
 def setup_gui(server: viser.ViserServer, manager: ViserCallbackManager):
@@ -344,7 +431,9 @@ def setup_gui(server: viser.ViserServer, manager: ViserCallbackManager):
         # Toggle buttons
         bbox_btn = server.gui.add_button("Toggle Bounding Boxes")
         centroid_btn = server.gui.add_button("Toggle Centroids")
+        id_btn = server.gui.add_button("Toggle IDs")
         label_btn = server.gui.add_button("Toggle Labels")
+        caption_btn = server.gui.add_button("Toggle Captions")
 
         @bbox_btn.on_click
         def _(_):
@@ -354,9 +443,17 @@ def setup_gui(server: viser.ViserServer, manager: ViserCallbackManager):
         def _(_):
             manager.toggle_centroids()
 
+        @id_btn.on_click
+        def _(_):
+            manager.toggle_ids()
+
         @label_btn.on_click
         def _(_):
             manager.toggle_labels()
+
+        @caption_btn.on_click
+        def _(_):
+            manager.toggle_captions()
 
     with server.gui.add_folder("CLIP Query"):
         # Query input
@@ -443,7 +540,7 @@ def main(cfg: DictConfig):
     set_seed(cfg.seed)
     path = Path(cfg.map_path)
     clip_ft = np.load(path / "clip_features.npy")
-    pcd_o3d = load_point_cloud(path)
+    pcd_o3d, segments_anno = load_point_cloud(path)
     ft_extractor = (
         hydra.utils.instantiate(cfg.ft_extraction)
         if hasattr(cfg, "ft_extraction")
@@ -462,6 +559,7 @@ def main(cfg: DictConfig):
         pcd_o3d=pcd_o3d,
         clip_ft=clip_ft,
         ft_extractor=ft_extractor,
+        segments_anno=segments_anno,
     )
 
     # Add initial point clouds
