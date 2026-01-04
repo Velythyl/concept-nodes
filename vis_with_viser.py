@@ -6,6 +6,8 @@ import json
 import html
 import difflib
 import re
+import os
+from functools import cached_property
 
 from pathlib import Path
 import numpy as np
@@ -13,10 +15,10 @@ import open3d as o3d
 import copy
 import time
 import threading
-import os
 
+import openai
+from openai import OpenAI
 import viser
-import viser.transforms as tf
 
 from concept_graphs.utils import load_map, set_seed
 from concept_graphs.viz.utils import similarities_to_rgb
@@ -25,14 +27,35 @@ from concept_graphs.mapping.similarity.semantic import CosineSimilarity01
 # A logger for this file
 log = logging.getLogger(__name__)
 
+LLM_SYSTEM_PROMPT = (
+    "You are a retrieval assistant for a 3D scene. Given an abstract user request and a set of"
+    " objects described by an id, label, and caption, return up to three object ids that best"
+    " satisfy the request. Choose only from the provided ids, sort them by relevance, and return"
+    " a JSON object shaped as {\"object_ids\": [id1, id2, id3]}. Return an empty list when nothing fits."
+)
+
 
 class ViserCallbackManager:
     """Manages point cloud visualizations and callbacks for Viser."""
 
-    def __init__(self, server: viser.ViserServer, pcd_o3d, clip_ft, ft_extractor=None, segments_anno=None, axes_ordering="xzy"):
+    def __init__(
+        self,
+        server: viser.ViserServer,
+        pcd_o3d,
+        clip_ft,
+        ft_extractor=None,
+        segments_anno=None,
+        axes_ordering="xzy",
+        llm_client: OpenAI | None = None,
+        llm_model: str = "gpt-4o-mini",
+        llm_system_prompt: str | None = None,
+    ):
         self.server = server
         self.ft_extractor = ft_extractor  # Might be None initially
         self.axes_ordering = axes_ordering
+        self.llm_client = llm_client
+        self.llm_model = llm_model
+        self.llm_system_prompt = llm_system_prompt or LLM_SYSTEM_PROMPT
 
         # Store point cloud data
         self.pcd = pcd_o3d
@@ -90,21 +113,10 @@ class ViserCallbackManager:
         
         # Store segment annotations for labels and captions
         self.segments_anno = segments_anno
-        self.labels = self._extract_labels()
-        self.captions = self._extract_captions()
-        self.search_corpus = self._build_text_corpus()
 
         # Chat history for GUI chat panel
         self.chat_messages = []
         self.chat_markdown_handle = None
-
-        # Fixed palette for LLM search highlights (green, yellow, red, black)
-        self.llm_palette = [
-            np.array([0.0, 0.8, 0.0], dtype=np.float32),  # top match
-            np.array([0.95, 0.85, 0.0], dtype=np.float32),  # second
-            np.array([0.9, 0.1, 0.1], dtype=np.float32),  # third
-        ]
-        self.llm_default_color = np.zeros(3, dtype=np.float32)
 
     def notify_clients(self, title: str, body: str, *, client=None, **kwargs):
         """Send a notification to one client or all connected clients."""
@@ -135,7 +147,21 @@ class ViserCallbackManager:
             color="green",
             auto_close_seconds=6.0,
         )
-        self.add_chat_message("System", msg)
+
+    def set_llm_client(self, llm_client: OpenAI, llm_model: str | None = None):
+        """Attach the OpenAI client once credentials are available."""
+        self.llm_client = llm_client
+        if llm_model:
+            self.llm_model = llm_model
+
+        msg = f"LLM client ready using model '{self.llm_model}'."
+        log.info(msg)
+        self.notify_clients(
+            title="LLM",
+            body=msg,
+            color="green",
+            auto_close_seconds=6.0,
+        )
 
     def _compute_bboxes(self):
         """Compute oriented bounding boxes for each point cloud."""
@@ -163,35 +189,30 @@ class ViserCallbackManager:
                 })
         return bboxes
     
-    def _extract_labels(self):
-        """Extract labels from segment annotations."""
+    def _extract_text_field(self, field: str, *, fallback_field: str | None = None):
+        """Extract a text field from segment annotations with optional fallback."""
         if self.segments_anno is None:
             return ["" for _ in range(self.num_objects)]
-        
-        labels = []
-        for seg_group in self.segments_anno.get("segGroups", []):
-            label = seg_group.get("label", "")
-            if label == "empty":
-                # Try caption if label is empty
-                label = seg_group.get("caption", "")
-            labels.append(label)
-        
-        return labels
-    
-    def _extract_captions(self):
-        """Extract captions from segment annotations."""
-        if self.segments_anno is None:
-            return ["" for _ in range(self.num_objects)]
-        
-        captions = []
-        for seg_group in self.segments_anno.get("segGroups", []):
-            caption = seg_group.get("caption", "")
-            captions.append(caption)
-        
-        return captions
 
-    def _build_text_corpus(self):
-        """Combine labels and captions for lightweight text search."""
+        values = []
+        for seg_group in self.segments_anno.get("segGroups", []):
+            value = seg_group.get(field, "")
+            if fallback_field and (not value or value == "empty"):
+                value = seg_group.get(fallback_field, "")
+            values.append(value)
+
+        return values
+
+    @cached_property
+    def labels(self):
+        return self._extract_text_field("label", fallback_field="caption")
+
+    @cached_property
+    def captions(self):
+        return self._extract_text_field("caption")
+
+    @cached_property
+    def search_corpus(self):
         corpus = []
         for label, caption in zip(self.labels, self.captions):
             pieces = [label.strip(), caption.strip()]
@@ -533,20 +554,68 @@ class ViserCallbackManager:
 
         return scores
 
+    def _build_llm_messages(self, query_text: str):
+        """Construct system+user messages for OpenAI completion."""
+        object_lines = []
+        for idx, (label, caption) in enumerate(zip(self.labels, self.captions)):
+            safe_label = label if label else "unknown"
+            safe_caption = caption if caption else "unknown"
+            object_lines.append(f"{idx}: label='{safe_label}' | caption='{safe_caption}'")
+
+        user_message = (
+            "Given an abstract user request, choose up to three objects that best satisfy it. "
+            "Only use the provided ids and keep them in best-first order."
+            f"\nUser request: {query_text}\nObjects:\n" + "\n".join(object_lines)
+        )
+
+        return [
+            {"role": "system", "content": self.llm_system_prompt},
+            {"role": "user", "content": user_message},
+        ]
+
+    def _extract_object_ids(self, content: str) -> list[int]:
+        """Parse object ids from LLM JSON response; tolerate loose text."""
+        ids: list[int] = []
+
+        try:
+            parsed = json.loads(content)
+            candidate_ids = parsed.get("object_ids", []) if isinstance(parsed, dict) else []
+            for cand in candidate_ids:
+                if isinstance(cand, (int, float)):
+                    ids.append(int(cand))
+        except json.JSONDecodeError:
+            # Fallback to any integers in the text
+            ids = [int(match) for match in re.findall(r"\d+", content)]
+
+        seen = set()
+        filtered = []
+        for idx in ids:
+            if 0 <= idx < self.num_objects and idx not in seen:
+                filtered.append(idx)
+                seen.add(idx)
+
+        return filtered[:3]
+
     def _apply_llm_palette(self, ranked_indices):
         """Apply fixed palette: green, yellow, red, else black."""
+        palette = [
+            np.array([0.0, 0.8, 0.0], dtype=np.float32),
+            np.array([0.95, 0.85, 0.0], dtype=np.float32),
+            np.array([0.9, 0.1, 0.1], dtype=np.float32),
+        ]
+        default_color = np.zeros(3, dtype=np.float32)
         centroid_colors = []
         updated_colors = []
 
         for obj_idx in range(self.num_objects):
-            color = self.llm_default_color
+            color = default_color
             if ranked_indices:
                 if obj_idx == ranked_indices[0]:
-                    color = self.llm_palette[0]
+                    color = palette[0]
                 elif len(ranked_indices) > 1 and obj_idx == ranked_indices[1]:
-                    color = self.llm_palette[1]
+                    color = palette[1]
                 elif len(ranked_indices) > 2 and obj_idx == ranked_indices[2]:
-                    color = self.llm_palette[2]
+                    color = palette[2]
 
             color = color.astype(np.float32)
             updated_colors.append(np.tile(color, (len(self.points_list[obj_idx]), 1)))
@@ -564,10 +633,9 @@ class ViserCallbackManager:
             self.random_colors = original_random
 
     def llm_query(self, query_text: str, client=None):
-        """Search labels+captions, highlight top 3 with fixed colors."""
-        scores = self._score_llm_query(query_text)
-        if scores.max(initial=0.0) <= 0.0:
-            msg = "No textual metadata available to match this query."
+        """Send query to OpenAI and color top matches."""
+        if self.llm_client is None:
+            msg = "LLM client is still initializing."
             self.notify_clients(
                 title="LLM Query",
                 body=msg,
@@ -579,21 +647,82 @@ class ViserCallbackManager:
             log.warning(msg)
             return
 
-        ranked = list(np.argsort(scores)[::-1][:3])
-        self._apply_llm_palette(ranked)
+        messages = self._build_llm_messages(query_text)
 
-        summary = ", ".join([f"{idx} ({scores[idx]:.2f})" for idx in ranked])
-        log.info(f"LLM query: '{query_text}' - Top: {summary}")
-        self.notify_clients(
-            title="LLM Query",
-            body=f"Top match: {ranked[0]} (score {scores[ranked[0]]:.2f})",
-            client=client,
-            auto_close_seconds=5.0,
-        )
+        try:
+            response = self.llm_client.chat.completions.create(
+                model=self.llm_model,
+                messages=messages,
+                temperature=0.0,
+                response_format={"type": "json_object"},
+            )
+            content = response.choices[0].message.content or ""
+        except Exception as exc:  # noqa: BLE001
+            msg = f"OpenAI call failed: {exc}"
+            log.error(msg)
+            self.notify_clients(
+                title="LLM Query",
+                body="LLM request failed; check logs and credentials.",
+                client=client,
+                color="red",
+                with_close_button=True,
+            )
+            return
+
+        ranked = self._extract_object_ids(content)
+        if not ranked:
+            msg = "LLM returned no valid object ids for this query."
+            self.notify_clients(
+                title="LLM Query",
+                body=msg,
+                client=client,
+                color="yellow",
+                with_close_button=True,
+                auto_close_seconds=6.0,
+            )
+            log.warning(msg)
+            return
+
+        self._apply_llm_palette(ranked)
+        summary = ", ".join(str(idx) for idx in ranked)
+        result_msg = f"LLM query: '{query_text}' → {summary}"
+        log.info(result_msg)
+        return summary
 
     def respond(self, message: str) -> str:
-        """Generate an agent response (placeholder)."""
-        reply = "OK"
+        """Answer chat messages by forwarding to the LLM selection pipeline."""
+        user_text = message.strip()
+        if not user_text:
+            return ""
+
+        if self.llm_client is None:
+            reply = "LLM client is still initializing. Please try again shortly."
+            self.add_chat_message("Agent", reply)
+            return reply
+
+        messages = self._build_llm_messages(user_text)
+
+        try:
+            response = self.llm_client.chat.completions.create(
+                model=self.llm_model,
+                messages=messages,
+                temperature=0.0,
+                response_format={"type": "json_object"},
+            )
+            content = response.choices[0].message.content or ""
+        except Exception as exc:  # noqa: BLE001
+            reply = f"LLM chat failed: {exc}"
+            log.error(reply)
+            self.add_chat_message("Agent", reply)
+            return reply
+
+        ranked = self._extract_object_ids(content)
+        if ranked:
+            self._apply_llm_palette(ranked)
+            reply = f"Top objects: {', '.join(str(i) for i in ranked)}"
+        else:
+            reply = "No suitable objects found for that request."
+
         self.add_chat_message("Agent", reply)
         return reply
 
@@ -687,72 +816,21 @@ def setup_gui(server: viser.ViserServer, manager: ViserCallbackManager):
     with server.gui.add_folder("Chat", expand_by_default=False):
         # Use HTML handle so we can wrap messages in a scrollable container.
         chat_history = server.gui.add_html("<em>No messages yet.</em>")
-        chat_input = server.gui.add_text("Message", initial_value="", multiline=True)
-        send_btn = server.gui.add_button("Send")
-
         manager.register_chat_markdown(chat_history)
 
+        chat_input = server.gui.add_text("Message", initial_value="")
+
+        send_btn = server.gui.add_button("Send")
+
         @send_btn.on_click
-        def _(_):
-            user_message = chat_input.value.strip()
-            if not user_message:
+        def _(event):
+            user_text = chat_input.value.strip()
+            if not user_text:
                 return
 
-            manager.add_chat_message("User", user_message)
-            manager.respond(user_message)
+            manager.add_chat_message("You", user_text)
+            manager.respond(user_text)
             chat_input.value = ""
-
-
-def setup_audio_mode(server: viser.ViserServer, manager: ViserCallbackManager, cfg: DictConfig):
-    """Set up audio mode with voice commands."""
-    from openai import OpenAI
-    import openai
-    from listen_for_keyword import VoskModel
-
-    openai.api_key = os.getenv("OPENAI_API_KEY")
-    client = OpenAI()
-    vosk_model = VoskModel(f"{cfg.cache_dir}/vosk")
-
-    # Add chat panel to GUI
-    with server.gui.add_folder("Voice Chat"):
-        status_label = server.gui.add_text("Status", initial_value="Listening for 'hey rise'...")
-        last_query = server.gui.add_text("Last Query", initial_value="")
-
-    def run_audio_routine():
-        while True:
-            try:
-                # Listen for wake word
-                status_label.value = "Listening for 'hey rise'..."
-                vosk_model.listen_for_keywords(keywords=["hey", "rise"])
-
-                # Listen for command
-                status_label.value = "Listening for command (say 'please' when done)..."
-                hit, record_file = vosk_model.listen_for_keywords(keywords=["please"], record=True)
-
-                # Transcribe
-                status_label.value = "Transcribing..."
-                with open(record_file, "rb") as open_record_file:
-                    transcription = client.audio.transcriptions.create(
-                        model="gpt-4o-transcribe",
-                        file=open_record_file,
-                        response_format="text"
-                    )
-
-                # Execute query
-                query = transcription.strip()
-                last_query.value = query
-                log.info(f"Voice query: {query}")
-                manager.query(query)
-
-            except Exception as e:
-                log.error(f"Audio routine error: {e}")
-                status_label.value = f"Error: {e}"
-                time.sleep(1)
-
-    # Start audio thread
-    audio_thread = threading.Thread(target=run_audio_routine, daemon=True)
-    audio_thread.start()
-
 
 
 @hydra.main(version_base=None, config_path="conf", config_name="visualizer")
@@ -763,6 +841,12 @@ def main(cfg: DictConfig):
     pcd_o3d, segments_anno = load_point_cloud(path)
 
     log.info(f"Loading map with a total of {len(pcd_o3d)} objects")
+
+    openai.api_key = os.getenv("OPENAI_API_KEY")
+    if not openai.api_key:
+        raise RuntimeError("OPENAI_API_KEY environment variable is not set")
+    llm_client = OpenAI()
+    log.info("OpenAI client initialized for LLM queries")
 
     # Create Viser server
     server = viser.ViserServer(host="0.0.0.0", port=8080)
@@ -775,7 +859,11 @@ def main(cfg: DictConfig):
         clip_ft=clip_ft,
         ft_extractor=None,
         segments_anno=segments_anno,
+        llm_client=llm_client,
+        llm_model=cfg.llm_model,
+        llm_system_prompt=LLM_SYSTEM_PROMPT,
     )
+    manager.set_llm_client(llm_client, cfg.llm_model)
 
     @server.on_client_connect
     def _(client: viser.ClientHandle):
@@ -823,12 +911,9 @@ def main(cfg: DictConfig):
         )
         log.info("Finished background loading of CLIP model.")
 
+
     loader_thread = threading.Thread(target=load_model_background, daemon=True)
     loader_thread.start()
-
-    # Handle different modes
-    if cfg.mode == "audio":
-        setup_audio_mode(server, manager, cfg)
 
     # Keep server running
     log.info("Visualization ready. Open http://localhost:8080 in your browser.")

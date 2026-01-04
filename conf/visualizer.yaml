@@ -7,3 +7,4 @@ map_path: ${output_dir}/latest_map
 mode: "gui"
 device: mps
 seed: 42
+llm_model: gpt-4o-mini
