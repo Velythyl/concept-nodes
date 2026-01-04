@@ -684,7 +684,7 @@ class ViserCallbackManager:
             return
 
         self._apply_llm_palette(ranked)
-        summary = ", ".join(str(idx) for idx in ranked)
+        summary = ", ".join(self.labels[idx] for idx in ranked)
         result_msg = f"LLM query: '{query_text}' → {summary}"
         log.info(result_msg)
         return summary
@@ -719,12 +719,18 @@ class ViserCallbackManager:
         ranked = self._extract_object_ids(content)
         if ranked:
             self._apply_llm_palette(ranked)
-            reply = f"Top objects: {', '.join(str(i) for i in ranked)}"
+            reply = f"Top objects: {', '.join(self.labels[i] for i in ranked)}"
         else:
             reply = "No suitable objects found for that request."
 
         self.add_chat_message("Agent", reply)
         return reply
+
+    def listen(self):
+        """Start listening for audio input (currently unimplemented)."""
+        log.info("Listen method called - audio input not yet implemented")
+        # TODO: Implement audio input functionality
+        pass
 
 
 def load_point_cloud(path):
@@ -819,8 +825,12 @@ def setup_gui(server: viser.ViserServer, manager: ViserCallbackManager):
         manager.register_chat_markdown(chat_history)
 
         chat_input = server.gui.add_text("Message", initial_value="")
-
+        
+        # State for mic button
+        mic_state = {"listening": False}
+        
         send_btn = server.gui.add_button("Send")
+        mic_btn = server.gui.add_button("🎤", hint="Hold to record audio")
 
         @send_btn.on_click
         def _(event):
@@ -831,6 +841,28 @@ def setup_gui(server: viser.ViserServer, manager: ViserCallbackManager):
             manager.add_chat_message("You", user_text)
             manager.respond(user_text)
             chat_input.value = ""
+
+        @mic_btn.on_click
+        def _(event):
+            """Toggle audio mode."""
+            mic_state["listening"] = not mic_state["listening"]
+            
+            if mic_state["listening"]:
+                # Start listening: change to green background
+                try:
+                    mic_btn.color = "green"
+                except AttributeError:
+                    # If style is read-only, try alternative approach
+                    pass
+                send_btn.disabled = True
+                manager.listen()
+            else:
+                # Stop listening: revert to default background
+                try:
+                    mic_btn.color = ""
+                except AttributeError:
+                    pass
+                send_btn.disabled = False
 
 
 @hydra.main(version_base=None, config_path="conf", config_name="visualizer")
