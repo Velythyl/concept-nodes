@@ -4,7 +4,6 @@ from omegaconf import DictConfig
 import logging
 import json
 import html
-import difflib
 import re
 import os
 from functools import cached_property
@@ -12,7 +11,6 @@ from functools import cached_property
 from pathlib import Path
 import numpy as np
 import open3d as o3d
-import copy
 import time
 import threading
 
@@ -20,7 +18,7 @@ import openai
 from openai import OpenAI
 import viser
 
-from concept_graphs.utils import load_map, set_seed
+from concept_graphs.utils import set_seed
 from concept_graphs.viz.utils import similarities_to_rgb
 from concept_graphs.mapping.similarity.semantic import CosineSimilarity01
 
@@ -47,7 +45,7 @@ class ViserCallbackManager:
         segments_anno=None,
         dense_points=None,
         dense_colors=None,
-        axes_ordering="xzy",
+        axes_ordering="-xzy",
         llm_client: OpenAI | None = None,
         llm_model: str = "gpt-4o-mini",
         llm_system_prompt: str | None = None,
@@ -69,20 +67,33 @@ class ViserCallbackManager:
         self.points_list = [np.asarray(p.points).astype(np.float32) for p in self.pcd]
         self.og_colors = [np.asarray(p.colors).astype(np.float32) for p in self.pcd]
         
-        # Apply axes transformation
+        # Apply axes transformation (supports signed axes like "-x-y-z" or "-xzy")
         if axes_ordering != "xyz":
             axis_map = {'x': 0, 'y': 1, 'z': 2}
+
+            def _parse_signed_axes(ordering: str):
+                signed = []
+                sign = 1
+                for ch in ordering:
+                    if ch == "-":
+                        sign = -1
+                        continue
+                    idx = axis_map[ch.lower()]
+                    signed.append((idx, sign))
+                    sign = 1
+                if len(signed) != 3:
+                    raise ValueError("axes_ordering must specify exactly 3 axes")
+                indices = [idx for idx, _ in signed]
+                signs = np.array([sgn for _, sgn in signed], dtype=np.float32)
+                return indices, signs
+
             try:
-                indices = [axis_map[ax.lower()] for ax in axes_ordering]
-                self.points_list = [pts[:, indices] for pts in self.points_list]
+                indices, signs = _parse_signed_axes(axes_ordering)
+                self.points_list = [pts[:, indices] * signs for pts in self.points_list]
                 if self.dense_points is not None:
-                    self.dense_points = self.dense_points[:, indices]
-            except (KeyError, IndexError):
+                    self.dense_points = self.dense_points[:, indices] * signs
+            except (KeyError, IndexError, ValueError):
                 log.warning(f"Invalid axes_ordering '{axes_ordering}', using 'xyz'")
-        # Fallbacks if dense data exists but wasn't pre-processed
-        #if self.dense_points is None and self.dense_colors is not None:
-        #    # No points means colors are unusable; drop them for consistency
-        #    self.dense_colors = None
 
         # Compute centroids and bounding boxes
         self.centroids = [np.mean(pts, axis=0) for pts in self.points_list]
@@ -116,11 +127,21 @@ class ViserCallbackManager:
         self.ids_visible = False
         self.labels_visible = False
         self.captions_visible = False
-        self.current_color_mode = "rgb"  # "rgb", "random", "similarity"
 
-        # Current colors (start with original colors)
-        self.current_colors = [c.copy() for c in self.og_colors]
+        # Stacking mode states (checkboxes)
+        self.rgb_enabled = True
+        self.random_enabled = False
+        self.similarity_enabled = False
+        self.dense_enabled = False
+        self.llm_palette_active = False
+        self.llm_palette_colors = None
         
+        # GUI checkbox handles (set by setup_gui)
+        self.similarity_checkbox = None
+
+        # Small epsilon for point offset to prevent z-fighting
+        self.EPS = 0.001 #1e-5
+
         # Store segment annotations for labels and captions
         self.segments_anno = segments_anno
 
@@ -172,6 +193,22 @@ class ViserCallbackManager:
             color="green",
             auto_close_seconds=6.0,
         )
+
+    def offset_by_eps(self, points: np.ndarray) -> np.ndarray:
+        """Add small random offsets to points to prevent z-fighting.
+        
+        Samples N points uniformly from [-EPS, +EPS] and adds them to the input.
+        
+        Args:
+            points: Input point cloud of shape (N, 3)
+            
+        Returns:
+            Point cloud with small random offsets applied
+        """
+        offsets = np.random.uniform(-self.EPS, self.EPS, 
+            size=points.shape
+        ).astype(np.float32)
+        return points + offsets
 
     def _compute_bboxes(self):
         """Compute oriented bounding boxes for each point cloud."""
@@ -230,14 +267,6 @@ class ViserCallbackManager:
             corpus.append(combined)
         return corpus
 
-    @staticmethod
-    def _normalize_text(text: str) -> str:
-        return " ".join(text.lower().split())
-
-    @staticmethod
-    def _tokenize(text: str):
-        return set(re.findall(r"\b\w+\b", text))
-
     def register_chat_markdown(self, markdown_handle):
         """Attach the HTML/markdown handle used for chat history display."""
         self.chat_markdown_handle = markdown_handle
@@ -278,26 +307,75 @@ class ViserCallbackManager:
         )
 
     def add_point_clouds(self):
-        """Add all point clouds to the scene."""
+        """Add all point clouds to the scene based on enabled modes."""
         self.remove_point_clouds()
-        for i, (pts, colors) in enumerate(zip(self.points_list, self.current_colors)):
-            # Expand colors to per-point if uniform
-            if colors.ndim == 1:
-                colors_expanded = np.tile(colors, (len(pts), 1))
-            else:
-                colors_expanded = colors
-
-            # Convert to uint8 RGB
-            colors_uint8 = (np.clip(colors_expanded, 0, 1) * 255).astype(np.uint8)
-
+        
+        # Collect all enabled layers
+        layers = []
+        
+        if self.dense_enabled and self.dense_points is not None:
+            # Dense mode renders separately
+            dense_points = self.offset_by_eps(self.dense_points)
+            dense_colors = self.dense_colors if self.dense_colors is not None else np.tile(
+                np.array([0.6, 0.6, 0.6], dtype=np.float32), (len(dense_points), 1)
+            )
+            dense_colors_uint8 = (np.clip(dense_colors, 0, 1) * 255).astype(np.uint8)
             handle = self.server.scene.add_point_cloud(
-                name=f"/pointclouds/pcd_{i}",
-                points=pts,
-                colors=colors_uint8,
+                name="/pointclouds/dense",
+                points=dense_points,
+                colors=dense_colors_uint8,
                 point_size=0.01,
                 point_shape="circle",
             )
             self.pcd_handles.append(handle)
+        
+        if self.rgb_enabled:
+            layers.append(("rgb", self.og_colors))
+        
+        if self.random_enabled:
+            random_colors = [
+                np.tile(self.random_colors[i], (len(self.points_list[i]), 1))
+                for i in range(self.num_objects)
+            ]
+            layers.append(("random", random_colors))
+        
+        if self.similarity_enabled:
+            if self.llm_palette_active and self.llm_palette_colors is not None:
+                sim_colors = [
+                    np.tile(self.llm_palette_colors[i], (len(self.points_list[i]), 1)).astype(np.float32)
+                    for i in range(self.num_objects)
+                ]
+            else:
+                rgb = similarities_to_rgb(self.sim_query, cmap_name="inferno")
+                sim_colors = [
+                    np.tile(np.array(rgb[i]) / 255.0, (len(self.points_list[i]), 1)).astype(np.float32)
+                    for i in range(self.num_objects)
+                ]
+            layers.append(("similarity", sim_colors))
+        
+        # Add each layer with epsilon offset
+        for layer_name, colors_list in layers:
+            for i, (pts, colors) in enumerate(zip(self.points_list, colors_list)):
+                # Offset points to prevent z-fighting between layers
+                pts_offset = self.offset_by_eps(pts)
+                
+                # Expand colors to per-point if uniform
+                if colors.ndim == 1:
+                    colors_expanded = np.tile(colors, (len(pts), 1))
+                else:
+                    colors_expanded = colors
+
+                # Convert to uint8 RGB
+                colors_uint8 = (np.clip(colors_expanded, 0, 1) * 255).astype(np.uint8)
+
+                handle = self.server.scene.add_point_cloud(
+                    name=f"/pointclouds/{layer_name}_pcd_{i}",
+                    points=pts_offset,
+                    colors=colors_uint8,
+                    point_size=0.01,
+                    point_shape="circle",
+                )
+                self.pcd_handles.append(handle)
 
     def remove_point_clouds(self):
         """Remove all point cloud handles."""
@@ -475,69 +553,30 @@ class ViserCallbackManager:
             self.add_captions()
         self.captions_visible = not self.captions_visible
 
-    def _clear_overlays(self):
-        """Remove overlay elements and reset their visibility flags."""
-        if self.bbox_visible:
-            self.remove_bboxes()
-            self.bbox_visible = False
-        if self.centroid_visible:
-            self.remove_centroids()
-            self.centroid_visible = False
-        if self.ids_visible:
-            self.remove_ids()
-            self.ids_visible = False
-        if self.labels_visible:
-            self.remove_labels()
-            self.labels_visible = False
-        if self.captions_visible:
-            self.remove_captions()
-            self.captions_visible = False
-
-    def set_rgb_colors(self):
-        """Set original RGB colors."""
-        self.current_colors = [c.copy() for c in self.og_colors]
-        self.current_color_mode = "rgb"
+    def toggle_rgb_mode(self, enabled: bool):
+        """Toggle RGB color mode."""
+        self.rgb_enabled = enabled
         self.update_point_clouds()
         self._update_centroid_colors()
 
-    def set_random_colors(self):
-        """Set random uniform colors per object."""
-        self.current_colors = [
-            np.tile(self.random_colors[i], (len(self.points_list[i]), 1))
-            for i in range(self.num_objects)
-        ]
-        self.current_color_mode = "random"
+    def toggle_random_mode(self, enabled: bool):
+        """Toggle random color mode."""
+        self.random_enabled = enabled
         self.update_point_clouds()
         self._update_centroid_colors()
 
-    def set_similarity_colors(self):
-        """Set similarity-based colors."""
-        rgb = similarities_to_rgb(self.sim_query, cmap_name="inferno")
-        self.current_colors = [
-            np.tile(np.array(rgb[i]) / 255.0, (len(self.points_list[i]), 1)).astype(np.float32)
-            for i in range(self.num_objects)
-        ]
-        self.current_color_mode = "similarity"
+    def toggle_similarity_mode(self, enabled: bool):
+        """Toggle similarity color mode."""
+        self.similarity_enabled = enabled
+        # If unchecking, disable the checkbox
+        if not enabled and self.similarity_checkbox is not None:
+            self.similarity_checkbox.disabled = True
         self.update_point_clouds()
+        self._update_centroid_colors()
 
-        # Also update centroid colors
-        if self.centroid_visible:
-            self.remove_centroids()
-            # Temporarily override random_colors for centroids
-            original_random = self.random_colors.copy()
-            self.random_colors = np.array([np.array(c) / 255.0 for c in rgb], dtype=np.float32)
-            self.add_centroids()
-            self.random_colors = original_random
-
-    def _update_centroid_colors(self):
-        """Update centroid colors to match current scheme."""
-        if self.centroid_visible:
-            self.remove_centroids()
-            self.add_centroids()
-
-    def show_dense_point_cloud(self):
-        """Replace segmented view with a dense point cloud if available."""
-        if self.dense_points is None:
+    def toggle_dense_mode(self, enabled: bool):
+        """Toggle dense point cloud mode."""
+        if enabled and self.dense_points is None:
             self.notify_clients(
                 title="Dense Point Cloud",
                 body="Dense point cloud is not available at this map path.",
@@ -546,27 +585,29 @@ class ViserCallbackManager:
                 auto_close_seconds=6.0,
             )
             log.warning("Dense point cloud requested but not found.")
-            return
+            return False
+        self.dense_enabled = enabled
+        self.update_point_clouds()
+        return True
 
-        self.remove_point_clouds()
+    def enable_similarity_mode(self):
+        """Enable and check similarity mode after a query."""
+        self.similarity_enabled = True
+        if self.similarity_checkbox is not None:
+            self.similarity_checkbox.disabled = False
+            self.similarity_checkbox.value = True
+        self.update_point_clouds()
+        self._update_centroid_colors()
 
-        dense_points = self.dense_points
-        dense_colors = self.dense_colors if self.dense_colors is not None else np.array([], dtype=np.float32)
-        if dense_colors.size == 0:
-            dense_colors = np.tile(np.array([0.6, 0.6, 0.6], dtype=np.float32), (len(dense_points), 1))
+    def _update_centroid_colors(self):
+        """Update centroid colors to match current scheme."""
+        if self.centroid_visible:
+            self.remove_centroids()
+            self.add_centroids()
 
-        dense_colors_uint8 = (np.clip(dense_colors, 0, 1) * 255).astype(np.uint8)
-
-        handle = self.server.scene.add_point_cloud(
-            name="/pointclouds/dense",
-            points=dense_points,
-            colors=dense_colors_uint8,
-            point_size=0.01,
-            point_shape="circle",
-        )
-        self.pcd_handles = [handle]
-        self.current_color_mode = "dense"
-        log.info("Dense point cloud rendered (%d points).", len(dense_points))
+    def set_similarity_checkbox(self, checkbox):
+        """Store reference to the similarity checkbox for enabling/disabling."""
+        self.similarity_checkbox = checkbox
 
     def query(self, query_text: str, client=None):
         """Perform CLIP query and update similarity visualization."""
@@ -583,37 +624,15 @@ class ViserCallbackManager:
             )
             return
 
+        # Reset any LLM-specific palette so CLIP queries use the inferno colormap.
+        self.llm_palette_active = False
+        self.llm_palette_colors = None
+
         query_ft = self.ft_extractor.encode_text([query_text])
         self.sim_query = self.semantic_sim(query_ft, self.semantic_tensor)
         self.sim_query = self.sim_query.squeeze().cpu().numpy()
-        self.set_similarity_colors()
+        self.enable_similarity_mode()
         log.info(f"Query: '{query_text}' - Top match: Object {np.argmax(self.sim_query)}")
-
-    def _score_llm_query(self, query_text: str) -> np.ndarray:
-        """Approximate text similarity over labels+captions without a model."""
-        norm_query = self._normalize_text(query_text)
-        if not norm_query:
-            return np.zeros(self.num_objects, dtype=np.float32)
-
-        query_tokens = self._tokenize(norm_query)
-        scores = np.zeros(self.num_objects, dtype=np.float32)
-
-        for idx, entry in enumerate(self.search_corpus):
-            if not entry:
-                continue
-
-            norm_entry = self._normalize_text(entry)
-            entry_tokens = self._tokenize(norm_entry)
-
-            # Blend overlap and sequence similarity to rank lightweight matches.
-            overlap = 0.0
-            if entry_tokens:
-                overlap = len(query_tokens & entry_tokens) / max(len(query_tokens | entry_tokens), 1)
-
-            seq_ratio = difflib.SequenceMatcher(None, norm_query, norm_entry).ratio()
-            scores[idx] = 0.6 * seq_ratio + 0.4 * overlap
-
-        return scores
 
     def _build_llm_messages(self, query_text: str):
         """Construct system+user messages for OpenAI completion."""
@@ -658,7 +677,7 @@ class ViserCallbackManager:
         return filtered[:3]
 
     def _apply_llm_palette(self, ranked_indices):
-        """Apply fixed palette: green, yellow, red, else black."""
+        """Apply fixed palette to centroids and force similarity view on."""
         palette = [
             np.array([0.0, 0.8, 0.0], dtype=np.float32),
             np.array([0.95, 0.85, 0.0], dtype=np.float32),
@@ -666,26 +685,34 @@ class ViserCallbackManager:
         ]
         default_color = np.zeros(3, dtype=np.float32)
         centroid_colors = []
-        updated_colors = []
+
+        # Build an explicit similarity score vector so similarity mode still has data
+        # while the point colors come from the fixed palette.
+        similarity_scores = np.zeros(self.num_objects, dtype=np.float32)
+        score_steps = [1.0, 0.66, 0.33]
 
         for obj_idx in range(self.num_objects):
             color = default_color
             if ranked_indices:
                 if obj_idx == ranked_indices[0]:
                     color = palette[0]
+                    similarity_scores[obj_idx] = score_steps[0]
                 elif len(ranked_indices) > 1 and obj_idx == ranked_indices[1]:
                     color = palette[1]
+                    similarity_scores[obj_idx] = score_steps[1]
                 elif len(ranked_indices) > 2 and obj_idx == ranked_indices[2]:
                     color = palette[2]
+                    similarity_scores[obj_idx] = score_steps[2]
 
-            color = color.astype(np.float32)
-            updated_colors.append(np.tile(color, (len(self.points_list[obj_idx]), 1)))
-            centroid_colors.append(color)
+            centroid_colors.append(color.astype(np.float32))
 
-        self.current_colors = updated_colors
-        self.current_color_mode = "llm"
-        self.update_point_clouds()
+        # Drive the similarity layer so the GUI visibly switches on.
+        self.sim_query = similarity_scores
+        self.llm_palette_active = True
+        self.llm_palette_colors = np.array(centroid_colors, dtype=np.float32)
+        self.enable_similarity_mode()
 
+        # Keep centroid colors aligned with the palette without changing base random colors.
         if self.centroid_visible:
             self.remove_centroids()
             original_random = self.random_colors.copy()
@@ -825,27 +852,33 @@ def setup_gui(server: viser.ViserServer, manager: ViserCallbackManager):
 
     # Add folder for visualization controls
     with server.gui.add_folder("Visualization"):
-        # Color mode buttons
-        rgb_btn = server.gui.add_button("RGB Colors")
-        random_btn = server.gui.add_button("Random Colors")
-        dense_btn = server.gui.add_button("Show Dense Point Cloud")
-        #sim_btn = server.gui.add_button("Similarity Colors")
+        # Color mode checkboxes (stackable)
+        rgb_checkbox = server.gui.add_checkbox("RGB Colors", initial_value=True)
+        random_checkbox = server.gui.add_checkbox("Random Colors", initial_value=False)
+        similarity_checkbox = server.gui.add_checkbox("Similarity Colors", initial_value=False)
+        similarity_checkbox.disabled = True  # Initially disabled until a query is run
+        dense_checkbox = server.gui.add_checkbox("Dense Point Cloud", initial_value=False)
+        
+        # Store reference to similarity checkbox in manager
+        manager.set_similarity_checkbox(similarity_checkbox)
 
-        @rgb_btn.on_click
-        def _(_):
-            manager.set_rgb_colors()
+        @rgb_checkbox.on_update
+        def _(event):
+            manager.toggle_rgb_mode(rgb_checkbox.value)
 
-        @random_btn.on_click
-        def _(_):
-            manager.set_random_colors()
+        @random_checkbox.on_update
+        def _(event):
+            manager.toggle_random_mode(random_checkbox.value)
 
-        @dense_btn.on_click
-        def _(_):
-            manager.show_dense_point_cloud()
+        @similarity_checkbox.on_update
+        def _(event):
+            manager.toggle_similarity_mode(similarity_checkbox.value)
 
-        #@sim_btn.on_click
-        #def _(_):
-        #    manager.set_similarity_colors()
+        @dense_checkbox.on_update
+        def _(event):
+            success = manager.toggle_dense_mode(dense_checkbox.value)
+            if not success:
+                dense_checkbox.value = False
 
     with server.gui.add_folder("Toggles"):
         # Toggle buttons
