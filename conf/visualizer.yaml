@@ -1,9 +1,10 @@
 defaults:
   - ft_extraction: CLIP_H14
-  - paths: paths
+  - paths: local
   - _self_
 
 map_path: ${output_dir}/latest_map
 mode: "gui"
-device: cuda
+device: mps
 seed: 42
+llm_model: gpt-4o-mini

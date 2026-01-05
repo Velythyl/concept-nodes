@@ -1,0 +1,4 @@
+# @package _global_
+cache_dir: /Users/charlie/Projects/cg/DATAPIPES/MODEL_CACHE # Where to save model checkpoints and other assets
+data_dir: /Users/charlie/Projects/cg/DATAPIPES/INPUT # Where to look for datasets by default
+output_dir: /Users/charlie/Projects/cg/DATAPIPES/OUTPUT # Where to save outputs

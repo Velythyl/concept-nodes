@@ -9,6 +9,7 @@ import cv2
 from .Object import Object, ObjectFactory
 from .similarity.Similarity import Similarity
 from .utils import pairs_to_connected_components
+from ..torch_utils import np_to_torch
 
 
 class ObjectMap:
@@ -118,9 +119,9 @@ class ObjectMap:
     def collate_geometry(self):
         if len(self):
             self.pcd_tensors = [
-                torch.from_numpy(p).to(self.device) for p in self.pcd_np
+                np_to_torch(p).to(self.device) for p in self.pcd_np
             ]
-            self.centroid_tensor = torch.from_numpy(self.centroids_np).to(self.device)
+            self.centroid_tensor = np_to_torch(self.centroids_np).to(self.device)
         else:
             self.object_pcds = None
             self.centroid_tensor = None

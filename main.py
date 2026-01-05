@@ -8,9 +8,12 @@ from pathlib import Path
 import hydra
 from omegaconf import DictConfig, OmegaConf
 from tqdm import tqdm
+import open3d as o3d
 
+from concept_graphs.torch_utils import maybe_set_mps_compatibility_flags
 from concept_graphs.utils import set_seed
 from concept_graphs.mapping.utils import test_unique_segments
+from concept_graphs.perception.rgbd_to_pcd import rgbd_to_object_pcd
 
 import visualizer
 
@@ -20,6 +23,7 @@ log = logging.getLogger(__name__)
 
 @hydra.main(version_base=None, config_path="conf", config_name="strayscanner")
 def main(cfg: DictConfig):
+    maybe_set_mps_compatibility_flags(cfg.device)
     set_seed(cfg.seed)
 
     log.info(f"Running algo {cfg.name}...")
@@ -43,7 +47,39 @@ def main(cfg: DictConfig):
 
     main_map = hydra.utils.instantiate(cfg.mapping)
 
-    for obs in dataloader:
+    # Dense point cloud accumulation
+    dense_pcd = o3d.geometry.PointCloud() if cfg.save_dense else None
+
+    for frame_count, obs in enumerate(dataloader):
+        # Accumulate dense point cloud from each frame
+        if cfg.save_dense:
+            # Create a full mask to capture all points
+            import numpy as np
+            h, w = obs["rgb"].shape[:2]
+            full_mask = np.ones((1, h, w), dtype=bool)
+            
+            # Use rgbd_to_object_pcd with full mask
+            pcd_points, pcd_rgb = rgbd_to_object_pcd(
+                rgb=obs["rgb"],
+                depth=obs["depth"],
+                masks=full_mask,
+                intrinsics=obs["intrinsics"],
+                depth_trunc=cfg.dataset.depth_trunc,
+            )
+            
+            # Convert to Open3D point cloud and transform to world coordinates
+            frame_pcd = o3d.geometry.PointCloud()
+            frame_pcd.points = o3d.utility.Vector3dVector(pcd_points[0])
+            frame_pcd.colors = o3d.utility.Vector3dVector(pcd_rgb[0] / 255.0)
+            frame_pcd.transform(obs["camera_pose"])
+            
+            dense_pcd += frame_pcd
+            
+            # Periodically downsample to manage memory
+            if cfg.dense_culling_freq is not None and frame_count % cfg.dense_culling_freq == 0:
+                dense_pcd = dense_pcd.voxel_down_sample(voxel_size=cfg.voxel_size)
+                log.info(f"Culled dense point cloud at frame {frame_count}: {len(dense_pcd.points)} points")
+
         segments = perception_pipeline(obs["rgb"], obs["depth"], obs["intrinsics"])
 
         if segments is None:
@@ -66,6 +102,12 @@ def main(cfg: DictConfig):
         main_map.self_merge()
     main_map.downsample_objects()
     main_map.filter_min_points_pcd()
+
+    # Downsample dense point cloud for efficiency
+    if cfg.save_dense:
+        log.info(f"Dense point cloud has {len(dense_pcd.points)} points before downsampling")
+        dense_pcd = dense_pcd.voxel_down_sample(voxel_size=cfg.voxel_size)
+        log.info(f"Dense point cloud has {len(dense_pcd.points)} points after downsampling")
 
     stop = time.time()
     mapping_time = stop - start
@@ -103,6 +145,12 @@ def main(cfg: DictConfig):
     # Also export some data to standard files
     main_map.export(output_dir_map)
 
+    # Save dense point cloud
+    if cfg.save_dense:
+        dense_pcd_path = output_dir_map / "dense_point_cloud.pcd"
+        o3d.io.write_point_cloud(str(dense_pcd_path), dense_pcd)
+        log.info(f"Saved dense point cloud to {dense_pcd_path}")
+
     # Hydra config
     OmegaConf.save(cfg, output_dir_map / "config.yaml")
 
@@ -111,10 +159,13 @@ def main(cfg: DictConfig):
     json.dump(stats, open(output_dir_map / "stats.json", "w"))
     
     # Offline visualization of the map
-    viz_cfg = OmegaConf.load("conf/visualizer.yaml")
-    viz_cfg.mode = "offline_screenshot"
-    viz_cfg.map_path = str(output_dir_map)
-    visualizer.main(viz_cfg)
+    try:
+        viz_cfg = OmegaConf.load("conf/visualizer.yaml")
+        viz_cfg.mode = "offline_screenshot"
+        viz_cfg.map_path = str(output_dir_map)
+        visualizer.main(viz_cfg)
+    except RuntimeError as e:
+        log.warning(f"Could not create offline visualizations: {e}")
 
     # Create symlink to latest map
     symlink = output_dir / "latest_map"
