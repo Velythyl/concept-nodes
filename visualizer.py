@@ -19,7 +19,7 @@ import os
 import sys
 import time
 
-from listen_for_keyword import VoskModel
+
 
 # A logger for this file
 log = logging.getLogger(__name__)
@@ -306,6 +306,7 @@ def main(cfg: DictConfig):
         import openai
         openai.api_key = os.getenv("OPENAI_API_KEY")
         client = OpenAI()
+        from listen_for_keyword import VoskModel
         vosk_model = VoskModel(f"{cfg.cache_dir}/vosk")
 
         audio_routine_results = []
