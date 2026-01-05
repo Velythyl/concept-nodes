@@ -45,6 +45,8 @@ class ViserCallbackManager:
         clip_ft,
         ft_extractor=None,
         segments_anno=None,
+        dense_points=None,
+        dense_colors=None,
         axes_ordering="xzy",
         llm_client: OpenAI | None = None,
         llm_model: str = "gpt-4o-mini",
@@ -60,6 +62,8 @@ class ViserCallbackManager:
         # Store point cloud data
         self.pcd = pcd_o3d
         self.num_objects = len(self.pcd)
+        self.dense_points = dense_points
+        self.dense_colors = dense_colors
 
         # Extract points and colors from Open3D point clouds
         self.points_list = [np.asarray(p.points).astype(np.float32) for p in self.pcd]
@@ -71,8 +75,14 @@ class ViserCallbackManager:
             try:
                 indices = [axis_map[ax.lower()] for ax in axes_ordering]
                 self.points_list = [pts[:, indices] for pts in self.points_list]
+                if self.dense_points is not None:
+                    self.dense_points = self.dense_points[:, indices]
             except (KeyError, IndexError):
                 log.warning(f"Invalid axes_ordering '{axes_ordering}', using 'xyz'")
+        # Fallbacks if dense data exists but wasn't pre-processed
+        #if self.dense_points is None and self.dense_colors is not None:
+        #    # No points means colors are unusable; drop them for consistency
+        #    self.dense_colors = None
 
         # Compute centroids and bounding boxes
         self.centroids = [np.mean(pts, axis=0) for pts in self.points_list]
@@ -465,6 +475,24 @@ class ViserCallbackManager:
             self.add_captions()
         self.captions_visible = not self.captions_visible
 
+    def _clear_overlays(self):
+        """Remove overlay elements and reset their visibility flags."""
+        if self.bbox_visible:
+            self.remove_bboxes()
+            self.bbox_visible = False
+        if self.centroid_visible:
+            self.remove_centroids()
+            self.centroid_visible = False
+        if self.ids_visible:
+            self.remove_ids()
+            self.ids_visible = False
+        if self.labels_visible:
+            self.remove_labels()
+            self.labels_visible = False
+        if self.captions_visible:
+            self.remove_captions()
+            self.captions_visible = False
+
     def set_rgb_colors(self):
         """Set original RGB colors."""
         self.current_colors = [c.copy() for c in self.og_colors]
@@ -506,6 +534,39 @@ class ViserCallbackManager:
         if self.centroid_visible:
             self.remove_centroids()
             self.add_centroids()
+
+    def show_dense_point_cloud(self):
+        """Replace segmented view with a dense point cloud if available."""
+        if self.dense_points is None:
+            self.notify_clients(
+                title="Dense Point Cloud",
+                body="Dense point cloud is not available at this map path.",
+                color="yellow",
+                with_close_button=True,
+                auto_close_seconds=6.0,
+            )
+            log.warning("Dense point cloud requested but not found.")
+            return
+
+        self.remove_point_clouds()
+
+        dense_points = self.dense_points
+        dense_colors = self.dense_colors if self.dense_colors is not None else np.array([], dtype=np.float32)
+        if dense_colors.size == 0:
+            dense_colors = np.tile(np.array([0.6, 0.6, 0.6], dtype=np.float32), (len(dense_points), 1))
+
+        dense_colors_uint8 = (np.clip(dense_colors, 0, 1) * 255).astype(np.uint8)
+
+        handle = self.server.scene.add_point_cloud(
+            name="/pointclouds/dense",
+            points=dense_points,
+            colors=dense_colors_uint8,
+            point_size=0.01,
+            point_shape="circle",
+        )
+        self.pcd_handles = [handle]
+        self.current_color_mode = "dense"
+        log.info("Dense point cloud rendered (%d points).", len(dense_points))
 
     def query(self, query_text: str, client=None):
         """Perform CLIP query and update similarity visualization."""
@@ -734,9 +795,18 @@ class ViserCallbackManager:
 
 
 def load_point_cloud(path):
-    """Load point cloud and segment annotations."""
+    """Load point cloud, dense cloud arrays, and segment annotations."""
     path = Path(path)
     pcd = o3d.io.read_point_cloud(str(path / "point_cloud.pcd"))
+    dense_path = path / "dense_point_cloud.pcd"
+    dense_points = None
+    dense_colors = None
+    if dense_path.exists():
+        dense_pcd = o3d.io.read_point_cloud(str(dense_path))
+        dense_points = np.asarray(dense_pcd.points).astype(np.float32)
+        dense_colors = np.asarray(dense_pcd.colors).astype(np.float32)
+    else:
+        log.warning("Dense point cloud not found at %s", dense_path)
 
     with open(path / "segments_anno.json", "r") as f:
         segments_anno = json.load(f)
@@ -747,7 +817,7 @@ def load_point_cloud(path):
         obj = pcd.select_by_index(ann["segments"])
         pcd_o3d.append(obj)
 
-    return pcd_o3d, segments_anno
+    return pcd_o3d, segments_anno, dense_points, dense_colors
 
 
 def setup_gui(server: viser.ViserServer, manager: ViserCallbackManager):
@@ -758,6 +828,7 @@ def setup_gui(server: viser.ViserServer, manager: ViserCallbackManager):
         # Color mode buttons
         rgb_btn = server.gui.add_button("RGB Colors")
         random_btn = server.gui.add_button("Random Colors")
+        dense_btn = server.gui.add_button("Show Dense Point Cloud")
         #sim_btn = server.gui.add_button("Similarity Colors")
 
         @rgb_btn.on_click
@@ -767,6 +838,10 @@ def setup_gui(server: viser.ViserServer, manager: ViserCallbackManager):
         @random_btn.on_click
         def _(_):
             manager.set_random_colors()
+
+        @dense_btn.on_click
+        def _(_):
+            manager.show_dense_point_cloud()
 
         #@sim_btn.on_click
         #def _(_):
@@ -870,7 +945,7 @@ def main(cfg: DictConfig):
     set_seed(cfg.seed)
     path = Path(cfg.map_path)
     clip_ft = np.load(path / "clip_features.npy")
-    pcd_o3d, segments_anno = load_point_cloud(path)
+    pcd_o3d, segments_anno, dense_points, dense_colors = load_point_cloud(path)
 
     log.info(f"Loading map with a total of {len(pcd_o3d)} objects")
 
@@ -891,6 +966,8 @@ def main(cfg: DictConfig):
         clip_ft=clip_ft,
         ft_extractor=None,
         segments_anno=segments_anno,
+        dense_points=dense_points,
+        dense_colors=dense_colors,
         llm_client=llm_client,
         llm_model=cfg.llm_model,
         llm_system_prompt=LLM_SYSTEM_PROMPT,
