@@ -13,7 +13,7 @@ import open3d as o3d
 from concept_graphs.torch_utils import maybe_set_mps_compatibility_flags
 from concept_graphs.utils import set_seed
 from concept_graphs.mapping.utils import test_unique_segments
-from rgbd_dataset.rgbd_dataset.rgbd_to_pcd import rgbd_to_pcd
+from concept_graphs.perception.rgbd_to_pcd import rgbd_to_object_pcd
 
 import visualizer
 
@@ -53,16 +53,26 @@ def main(cfg: DictConfig):
     for frame_count, obs in enumerate(dataloader):
         # Accumulate dense point cloud from each frame
         if cfg.save_dense:
-            frame_pcd = rgbd_to_pcd(
+            # Create a full mask to capture all points
+            import numpy as np
+            h, w = obs["rgb"].shape[:2]
+            full_mask = np.ones((1, h, w), dtype=bool)
+            
+            # Use rgbd_to_object_pcd with full mask
+            pcd_points, pcd_rgb = rgbd_to_object_pcd(
                 rgb=obs["rgb"],
                 depth=obs["depth"],
-                camera_pose=obs["camera_pose"],
+                masks=full_mask,
                 intrinsics=obs["intrinsics"],
-                width=obs["rgb"].shape[1],
-                height=obs["rgb"].shape[0],
                 depth_trunc=cfg.dataset.depth_trunc,
-                depth_scale=cfg.dataset.depth_scale,
             )
+            
+            # Convert to Open3D point cloud and transform to world coordinates
+            frame_pcd = o3d.geometry.PointCloud()
+            frame_pcd.points = o3d.utility.Vector3dVector(pcd_points[0])
+            frame_pcd.colors = o3d.utility.Vector3dVector(pcd_rgb[0] / 255.0)
+            frame_pcd.transform(obs["camera_pose"])
+            
             dense_pcd += frame_pcd
             
             # Periodically downsample to manage memory
