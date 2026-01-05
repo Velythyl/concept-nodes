@@ -8,10 +8,12 @@ from pathlib import Path
 import hydra
 from omegaconf import DictConfig, OmegaConf
 from tqdm import tqdm
+import open3d as o3d
 
 from concept_graphs.torch_utils import maybe_set_mps_compatibility_flags
 from concept_graphs.utils import set_seed
 from concept_graphs.mapping.utils import test_unique_segments
+from rgbd_dataset.rgbd_dataset.rgbd_to_pcd import rgbd_to_pcd
 
 import visualizer
 
@@ -45,7 +47,29 @@ def main(cfg: DictConfig):
 
     main_map = hydra.utils.instantiate(cfg.mapping)
 
-    for obs in dataloader:
+    # Dense point cloud accumulation
+    dense_pcd = o3d.geometry.PointCloud() if cfg.save_dense else None
+
+    for frame_count, obs in enumerate(dataloader):
+        # Accumulate dense point cloud from each frame
+        if cfg.save_dense:
+            frame_pcd = rgbd_to_pcd(
+                rgb=obs["rgb"],
+                depth=obs["depth"],
+                camera_pose=obs["camera_pose"],
+                intrinsics=obs["intrinsics"],
+                width=obs["rgb"].shape[1],
+                height=obs["rgb"].shape[0],
+                depth_trunc=cfg.dataset.depth_trunc,
+                depth_scale=cfg.dataset.depth_scale,
+            )
+            dense_pcd += frame_pcd
+            
+            # Periodically downsample to manage memory
+            if cfg.dense_culling_freq is not None and frame_count % cfg.dense_culling_freq == 0:
+                dense_pcd = dense_pcd.voxel_down_sample(voxel_size=cfg.voxel_size)
+                log.info(f"Culled dense point cloud at frame {frame_count}: {len(dense_pcd.points)} points")
+
         segments = perception_pipeline(obs["rgb"], obs["depth"], obs["intrinsics"])
 
         if segments is None:
@@ -68,6 +92,12 @@ def main(cfg: DictConfig):
         main_map.self_merge()
     main_map.downsample_objects()
     main_map.filter_min_points_pcd()
+
+    # Downsample dense point cloud for efficiency
+    if cfg.save_dense:
+        log.info(f"Dense point cloud has {len(dense_pcd.points)} points before downsampling")
+        dense_pcd = dense_pcd.voxel_down_sample(voxel_size=cfg.voxel_size)
+        log.info(f"Dense point cloud has {len(dense_pcd.points)} points after downsampling")
 
     stop = time.time()
     mapping_time = stop - start
@@ -104,6 +134,12 @@ def main(cfg: DictConfig):
 
     # Also export some data to standard files
     main_map.export(output_dir_map)
+
+    # Save dense point cloud
+    if cfg.save_dense:
+        dense_pcd_path = output_dir_map / "dense_point_cloud.pcd"
+        o3d.io.write_point_cloud(str(dense_pcd_path), dense_pcd)
+        log.info(f"Saved dense point cloud to {dense_pcd_path}")
 
     # Hydra config
     OmegaConf.save(cfg, output_dir_map / "config.yaml")

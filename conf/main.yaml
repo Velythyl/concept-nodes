@@ -17,6 +17,8 @@ debug: false
 caption: false
 tag: false
 save_map: true
+save_dense: false
+dense_culling_freq: null
 seed: 123
 
 dataloader:
