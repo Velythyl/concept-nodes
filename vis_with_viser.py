@@ -7,12 +7,15 @@ import html
 import re
 import os
 from functools import cached_property
+from http.server import HTTPServer, SimpleHTTPRequestHandler
+import socketserver
 
 from pathlib import Path
 import numpy as np
 import open3d as o3d
 import time
 import threading
+from matplotlib.pyplot import get_cmap
 
 import openai
 from openai import OpenAI
@@ -31,6 +34,8 @@ LLM_SYSTEM_PROMPT = (
     " satisfy the request. Choose only from the provided ids, sort them by relevance, and return"
     " a JSON object shaped as {\"object_ids\": [id1, id2, id3]}. Return an empty list when nothing fits."
 )
+
+SIMILARITY_CMAP = "RdYlGn"
 
 
 class ViserCallbackManager:
@@ -138,6 +143,9 @@ class ViserCallbackManager:
         
         # GUI checkbox handles (set by setup_gui)
         self.similarity_checkbox = None
+
+        # Similarity legend HTML handle (set by setup_gui)
+        self.cmap_html_handle = None
 
         # Small epsilon for point offset to prevent z-fighting
         self.EPS = 0.001 #1e-5
@@ -306,6 +314,14 @@ class ViserCallbackManager:
             "</div>"
         )
 
+    def set_cmap_html_handle(self, handle):
+        """Store reference to the colormap HTML handle created in setup_gui."""
+        self.cmap_html_handle = handle
+
+    def _set_cmap_visibility(self, visible: bool):
+        if self.cmap_html_handle is not None:
+            self.cmap_html_handle.visible = visible
+
     def add_point_clouds(self):
         """Add all point clouds to the scene based on enabled modes."""
         self.remove_point_clouds()
@@ -346,7 +362,7 @@ class ViserCallbackManager:
                     for i in range(self.num_objects)
                 ]
             else:
-                rgb = similarities_to_rgb(self.sim_query, cmap_name="inferno")
+                rgb = similarities_to_rgb(self.sim_query, cmap_name=SIMILARITY_CMAP)
                 sim_colors = [
                     np.tile(np.array(rgb[i]) / 255.0, (len(self.points_list[i]), 1)).astype(np.float32)
                     for i in range(self.num_objects)
@@ -571,6 +587,7 @@ class ViserCallbackManager:
         # If unchecking, disable the checkbox
         if not enabled and self.similarity_checkbox is not None:
             self.similarity_checkbox.disabled = True
+        self._set_cmap_visibility(enabled)
         self.update_point_clouds()
         self._update_centroid_colors()
 
@@ -596,6 +613,7 @@ class ViserCallbackManager:
         if self.similarity_checkbox is not None:
             self.similarity_checkbox.disabled = False
             self.similarity_checkbox.value = True
+        self._set_cmap_visibility(True)
         self.update_point_clouds()
         self._update_centroid_colors()
 
@@ -861,6 +879,30 @@ def setup_gui(server: viser.ViserServer, manager: ViserCallbackManager):
         
         # Store reference to similarity checkbox in manager
         manager.set_similarity_checkbox(similarity_checkbox)
+        
+        # Colormap legend (visible only when similarity mode is active)
+        cmap = get_cmap(SIMILARITY_CMAP)
+        stops = np.linspace(0.0, 1.0, 9)
+        color_stops = []
+        for frac in stops:
+            r, g, b, _ = cmap(frac)
+            color_stops.append(
+                f"rgb({int(r * 255)}, {int(g * 255)}, {int(b * 255)}) {frac * 100:.1f}%"
+            )
+        
+        gradient_css = ", ".join(color_stops)
+        cmap_html_content = f"""
+<div style="margin-top: 12px; padding: 0 8px; font-family: sans-serif; font-size: 11px;">
+  <div style="height: 14px; border-radius: 7px; overflow: hidden; border: 1px solid rgba(0, 0, 0, 0.2); background: linear-gradient(90deg, {gradient_css}); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);"></div>
+  <div style="display: flex; justify-content: space-between; margin-top: 4px; font-weight: 600; color: #666;">
+    <span>Low</span>
+    <span>High</span>
+  </div>
+</div>
+"""
+        cmap_html = server.gui.add_html(cmap_html_content, order=1000.0)
+        cmap_html.visible = False
+        manager.set_cmap_html_handle(cmap_html)
 
         @rgb_checkbox.on_update
         def _(event):
@@ -973,6 +1015,37 @@ def setup_gui(server: viser.ViserServer, manager: ViserCallbackManager):
                 send_btn.disabled = False
 
 
+def setup_data_collection_folder(server: viser.ViserServer, map_path: Path, video_port: int = 8081):
+    """Set up the Data Collection folder with rgb.mp4 video."""
+    rgb_video_path = map_path / "rgb.mp4"
+    
+    with server.gui.add_folder("Data Collection", expand_by_default=False):
+        if rgb_video_path.exists():
+            # Use HTTP URL to serve video from the static file server
+            video_url = f"http://localhost:{video_port}/rgb.mp4"
+            video_html = f"""
+<div style="margin: 12px 0; padding: 0 8px;">
+  <video width="100%" controls style="border-radius: 8px; border: 1px solid rgba(0, 0, 0, 0.2);">
+    <source src="{video_url}" type="video/mp4">
+    Your browser does not support the video tag.
+  </video>
+  <div style="margin-top: 8px; font-size: 11px; color: #666; font-family: sans-serif;">
+    RGB recording from data collection
+  </div>
+</div>
+"""
+            server.gui.add_html(video_html)
+        else:
+            no_video_html = f"""
+<div style="margin: 12px 8px; padding: 12px; background: #fff3cd; border: 1px solid #ffc107; border-radius: 4px; font-size: 12px; font-family: sans-serif; color: #856404;">
+  <strong>⚠️ Video not found</strong><br/>
+  <code>rgb.mp4</code> not found at:<br/>
+  <code style="font-size: 10px;">{rgb_video_path}</code>
+</div>
+"""
+            server.gui.add_html(no_video_html)
+
+
 @hydra.main(version_base=None, config_path="conf", config_name="visualizer")
 def main(cfg: DictConfig):
     set_seed(cfg.seed)
@@ -1030,6 +1103,30 @@ def main(cfg: DictConfig):
 
     # Setup GUI controls
     setup_gui(server, manager)
+    
+    # Start HTTP server for video in background
+    def start_video_server():
+        """Start a simple HTTP server to serve the rgb.mp4 file."""
+        class VideoHandler(SimpleHTTPRequestHandler):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, directory=str(path), **kwargs)
+            
+            def log_message(self, format, *args):
+                # Suppress HTTP server logs to keep output clean
+                pass
+        
+        try:
+            with socketserver.TCPServer(("", 8081), VideoHandler) as httpd:
+                log.info("Video server started at http://localhost:8081")
+                httpd.serve_forever()
+        except Exception as e:
+            log.error(f"Failed to start video server: {e}")
+    
+    video_server_thread = threading.Thread(target=start_video_server, daemon=True)
+    video_server_thread.start()
+    
+    # Setup Data Collection folder with video
+    setup_data_collection_folder(server, path, video_port=8081)
 
     # Background-load the CLIP model so UI is responsive immediately
     def load_model_background():
