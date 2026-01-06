@@ -14,6 +14,7 @@ from concept_graphs.torch_utils import maybe_set_mps_compatibility_flags
 from concept_graphs.utils import set_seed
 from concept_graphs.mapping.utils import test_unique_segments
 from concept_graphs.perception.rgbd_to_pcd import rgbd_to_object_pcd
+from concept_graphs.viz.video_utils import save_scene_videos
 
 import visualizer
 
@@ -150,6 +151,15 @@ def main(cfg: DictConfig):
         dense_pcd_path = output_dir_map / "dense_point_cloud.pcd"
         o3d.io.write_point_cloud(str(dense_pcd_path), dense_pcd)
         log.info(f"Saved dense point cloud to {dense_pcd_path}")
+
+    # Save RGB and depth videos
+    scene_path = Path(cfg.dataset.base_path) / cfg.dataset.scene
+    log.info(f"Saving RGB and depth videos from {scene_path}...")
+    save_scene_videos(
+        scene_path=scene_path,
+        output_dir=output_dir_map,
+        fps=30  # Default fps, could be made configurable
+    )
 
     # Hydra config
     OmegaConf.save(cfg, output_dir_map / "config.yaml")
