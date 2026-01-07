@@ -1016,8 +1016,9 @@ def setup_gui(server: viser.ViserServer, manager: ViserCallbackManager):
 
 
 def setup_data_collection_folder(server: viser.ViserServer, map_path: Path, video_port: int = 8081):
-    """Set up the Data Collection folder with rgb.mp4 video."""
+    """Set up the Data Collection folder with rgb.mp4 and depth.mp4 videos."""
     rgb_video_path = map_path / "rgb.mp4"
+    depth_video_path = map_path / "depth.mp4"
     
     with server.gui.add_folder("Data Collection", expand_by_default=False):
         if rgb_video_path.exists():
@@ -1041,6 +1042,31 @@ def setup_data_collection_folder(server: viser.ViserServer, map_path: Path, vide
   <strong>⚠️ Video not found</strong><br/>
   <code>rgb.mp4</code> not found at:<br/>
   <code style="font-size: 10px;">{rgb_video_path}</code>
+</div>
+"""
+            server.gui.add_html(no_video_html)
+
+        if depth_video_path.exists():
+            # Use HTTP URL to serve video from the static file server
+            video_url = f"http://localhost:{video_port}/depth.mp4"
+            video_html = f"""
+<div style="margin: 12px 0; padding: 0 8px;">
+  <video width="100%" controls style="border-radius: 8px; border: 1px solid rgba(0, 0, 0, 0.2);">
+    <source src="{video_url}" type="video/mp4">
+    Your browser does not support the video tag.
+  </video>
+  <div style="margin-top: 8px; font-size: 11px; color: #666; font-family: sans-serif;">
+    Depth recording from data collection
+  </div>
+</div>
+"""
+            server.gui.add_html(video_html)
+        else:
+            no_video_html = f"""
+<div style="margin: 12px 8px; padding: 12px; background: #fff3cd; border: 1px solid #ffc107; border-radius: 4px; font-size: 12px; font-family: sans-serif; color: #856404;">
+  <strong>⚠️ Video not found</strong><br/>
+  <code>depth.mp4</code> not found at:<br/>
+  <code style="font-size: 10px;">{depth_video_path}</code>
 </div>
 """
             server.gui.add_html(no_video_html)
@@ -1114,11 +1140,22 @@ def main(cfg: DictConfig):
             def log_message(self, format, *args):
                 # Suppress HTTP server logs to keep output clean
                 pass
+            
+            def copyfile(self, source, outputfile):
+                # Handle BrokenPipeError gracefully when client disconnects
+                try:
+                    super().copyfile(source, outputfile)
+                except BrokenPipeError:
+                    # Client disconnected before file transfer completed
+                    pass
         
         try:
             with socketserver.TCPServer(("", 8081), VideoHandler) as httpd:
                 log.info("Video server started at http://localhost:8081")
                 httpd.serve_forever()
+        except BrokenPipeError:
+            # Client disconnected - ignore
+            pass
         except Exception as e:
             log.error(f"Failed to start video server: {e}")
     
