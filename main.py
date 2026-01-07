@@ -3,6 +3,7 @@ import os
 import time
 import json
 import logging
+import threading
 from pathlib import Path
 
 import hydra
@@ -47,6 +48,28 @@ def main(cfg: DictConfig):
     n_segments = 0
 
     main_map = hydra.utils.instantiate(cfg.mapping)
+
+    # Start saving videos in background thread early since it doesn't depend on later processing
+    video_thread = None
+    output_dir_map = None
+    if cfg.save_map:
+        output_dir = Path(cfg.output_dir)
+        now = datetime.datetime.now()
+        date_time = now.strftime("%Y-%m-%d-%H-%M-%S.%f")
+        output_dir_map = output_dir / f"{dataset.name}_{cfg.name}_{date_time}"
+        scene_path = Path(cfg.dataset.base_path) / cfg.dataset.scene
+        
+        def save_videos_task():
+            log.info(f"Saving RGB and depth videos from {scene_path}...")
+            save_scene_videos(
+                scene_path=scene_path,
+                output_dir=output_dir_map,
+                fps=30  # Default fps, could be made configurable
+            )
+        if cfg.save_videos:
+            video_thread = threading.Thread(target=save_videos_task)
+            video_thread.start()
+            log.info("Started video saving in background thread...")
 
     # Dense point cloud accumulation
     dense_pcd = o3d.geometry.PointCloud() if cfg.save_dense else None
@@ -133,11 +156,6 @@ def main(cfg: DictConfig):
     if not cfg.save_map:
         return
 
-    output_dir = Path(cfg.output_dir)
-    now = datetime.datetime.now()
-    date_time = now.strftime("%Y-%m-%d-%H-%M-%S.%f")
-    output_dir_map = output_dir / f"{dataset.name}_{cfg.name}_{date_time}"
-
     log.info(f"Saving map, images and config to {output_dir_map}...")
     grid_image_path = output_dir_map / "object_viz"
     os.makedirs(grid_image_path, exist_ok=False)
@@ -151,15 +169,6 @@ def main(cfg: DictConfig):
         dense_pcd_path = output_dir_map / "dense_point_cloud.pcd"
         o3d.io.write_point_cloud(str(dense_pcd_path), dense_pcd)
         log.info(f"Saved dense point cloud to {dense_pcd_path}")
-
-    # Save RGB and depth videos
-    scene_path = Path(cfg.dataset.base_path) / cfg.dataset.scene
-    log.info(f"Saving RGB and depth videos from {scene_path}...")
-    save_scene_videos(
-        scene_path=scene_path,
-        output_dir=output_dir_map,
-        fps=30  # Default fps, could be made configurable
-    )
 
     # Hydra config
     OmegaConf.save(cfg, output_dir_map / "config.yaml")
@@ -186,6 +195,12 @@ def main(cfg: DictConfig):
     # Move debug directory if it exists
     if os.path.exists(output_dir / "debug"):
         os.rename(output_dir / "debug", output_dir_map / "debug")
+
+    # Wait for video saving thread to complete before exiting
+    if video_thread is not None:
+        log.info("Waiting for video saving to complete...")
+        video_thread.join()
+        log.info("Video saving completed.")
 
 
 if __name__ == "__main__":

@@ -18,6 +18,7 @@ debug: true
 caption: false
 tag: false
 save_map: true
+save_videos: true
 save_dense: true
 dense_culling_freq: null
 seed: 123
