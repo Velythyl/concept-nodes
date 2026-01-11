@@ -2,6 +2,7 @@ defaults:
   - algo: CGDetector # CG for tower, CGDetector for kitchen and bomb and outside scenes
   - dataset: StrayScannerRGBD
   - paths: my_paths
+  - mapping/DuplicateFilter@duplicate_filter
   - _self_
 
 name: ???
@@ -21,6 +22,7 @@ save_map: true
 save_videos: true
 save_dense: true
 dense_culling_freq: null
+filter_duplicates: true
 seed: 123
 
 dataloader:

@@ -2,6 +2,7 @@ defaults:
   - algo: ???
   - dataset: ???
   - paths: paths
+  - mapping/DuplicateFilter@duplicate_filter
   - _self_
 
 name: ???
@@ -20,6 +21,7 @@ save_map: true
 save_videos: true
 save_dense: false
 dense_culling_freq: null
+filter_duplicates: true
 seed: 123
 
 dataloader:

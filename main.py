@@ -152,6 +152,12 @@ def main(cfg: DictConfig):
         tagger = hydra.utils.instantiate(cfg.vlm_tag)
         tagger.caption_map(main_map)
 
+    # Duplicate filtering post-processing (after VLM captioning/tagging so text similarity can be used)
+    if cfg.filter_duplicates:
+        log.info("Filtering duplicate objects...")
+        duplicate_filter = hydra.utils.instantiate(cfg.duplicate_filter)
+        main_map = duplicate_filter.deduplicate(main_map)
+
     # Save visualizations and map
     if not cfg.save_map:
         return
@@ -198,7 +204,7 @@ def main(cfg: DictConfig):
 
     # Wait for video saving thread to complete before exiting
     if video_thread is not None:
-        log.info("Waiting for video saving to complete...")
+        log.info("Waiting for video saving to complete... This will take a while if you have a long video or slow disk!")
         video_thread.join()
         log.info("Video saving completed.")
 
