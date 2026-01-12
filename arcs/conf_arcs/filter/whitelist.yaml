@@ -1,0 +1,11 @@
+# Whitelist filter - example with specific object IDs
+defaults:
+  - default
+
+sources:
+  whitelist: [1, 2, 3, 4, 5]
+  blacklist: null
+
+targets:
+  whitelist: [10, 15, 20, 25, 30]
+  blacklist: null

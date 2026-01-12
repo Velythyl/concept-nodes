@@ -1,0 +1,8 @@
+# Random filter - use a random number of objects between bounds
+number_to_use:
+  constant: null
+  random_min: 3
+  random_max: 10
+
+names_to_include: null
+names_to_exclude: null

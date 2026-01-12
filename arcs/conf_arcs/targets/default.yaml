@@ -1,0 +1,14 @@
+# Default filter - consider all objects
+# number_to_use: how many objects to use
+#   - constant: use exactly this number (null = all)
+#   - random_min/random_max: if set, randomly pick between these bounds
+number_to_use:
+  constant: null
+  random_min: null
+  random_max: null
+
+# names_to_include: only consider objects with these labels/names (null = all)
+names_to_include: null
+
+# names_to_exclude: never consider objects with these labels/names (null = none)
+names_to_exclude: null

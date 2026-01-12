@@ -1,0 +1,8 @@
+# Limited filter - only use top N objects
+number_to_use:
+  constant: 10
+  random_min: null
+  random_max: null
+
+names_to_include: null
+names_to_exclude: null

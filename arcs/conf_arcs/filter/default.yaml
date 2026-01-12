@@ -1,0 +1,18 @@
+# Default filter configuration - consider all objects
+# Number of source/target objects to consider (null = all)
+num_sources: null
+num_targets: null
+
+# Source object filtering
+sources:
+  # Only consider these object IDs as sources (null = all)
+  whitelist: null
+  # Never consider these object IDs as sources (null = none)
+  blacklist: null
+
+# Target object filtering (uses same structure as sources via Hydra defaults)
+targets:
+  # Only consider these object IDs as targets (null = all)
+  whitelist: null
+  # Never consider these object IDs as targets (null = none)
+  blacklist: null

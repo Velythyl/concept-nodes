@@ -1,0 +1,11 @@
+# Blacklist filter - example excluding specific object IDs
+defaults:
+  - default
+
+sources:
+  whitelist: null
+  blacklist: [0]  # Exclude background object
+
+targets:
+  whitelist: null
+  blacklist: [0]  # Exclude background object

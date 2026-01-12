@@ -1,0 +1,100 @@
+# Langchain agent-based generation method - uses tools to iteratively build arcs
+name: langchain
+
+# Simulation parameters
+days: 2
+dt_hours: 1  # time step in hours
+
+# Maximum arcs per source object per timestep
+max_arcs_per_source: 3
+
+# Scene description provided by user (can be overridden via CLI)
+scene_description: |
+  A millwork shop. In the coming days, the shop will be busy producing a cabinet order for a local client.
+
+# System prompt for the langchain agent
+agent_system_prompt: |
+  You are a generation agent that models temporal relationships between objects in a scene.
+  Your job is to generate meaningful, grounded arcs (directed relationships) between objects based on realistic scenarios.
+  
+  You have access to tools to:
+  - IMAGINE: Get context about what might happen in the scene over time
+  - COMMIT_ARC: Record a relationship between two objects
+  - NEXT_TIMESTAMP: Close the record for the current time step and move the next time step
+  
+  Be realistic and grounded. Focus on common, everyday interactions - not fringe events or unlikely scenarios.
+  Consider how objects relate during normal daily routines.
+
+# Prompt template for IMAGINE tool (the internal LLM that generates scene context)
+imagine_long_horizon_prompt: |
+  Given this scene with objects:
+  {objects}
+  
+  Scene description: {scene_description}
+  
+  Provide a grounded, realistic schedule of events and patterns that could occur over {days} days.
+  Focus on:
+  - Daily routines and repetitive patterns
+  - Common interactions between objects
+  - Typical usage patterns
+  
+  Do NOT include:
+  - Unlikely accidents or "bad luck" scenarios
+  - Fringe events or rare occurrences
+  - Fantasy or unrealistic interactions
+  
+  Provide a structured timeline of realistic events. Your response should follow this example template:
+  
+  ```
+  ### Day 1
+
+  **6:00 AM - 7:00 AM: Opening and Setup**
+  - The **forklift (ID 0)** is used to organize materials for the day, moving **stacked plywood sheets (ID 6)** and **pallets (ID 7)** to the work areas.
+  - Workers clear the area around the **workbench (ID 4)**, ensuring all **cardboard boxes (ID 11)** are broken down and placed in the **trash cans (ID 1, ID 12)**.
+  
+  **7:00 AM - 9:00 AM: Morning Production**
+  - The **CNC machine (ID 14)** and **woodworking machine (ID 3)** are powered on and begin cutting and shaping wood from the **stacked plywood sheets (ID 6)**.
+  - The **downdraft table (ID 20)** is used to sand small wooden pieces, with dust being collected efficiently.
+  - Workers occasionally reference the **computer workstation (ID 16)** to review design specifications.
+  ...
+  ```
+
+
+imagine_short_horizon_prompt: |
+  Given this scene with objects:
+  {objects}
+  
+  Scene description: {scene_description}
+  
+  Provide a grounded, realistic schedule of events and patterns that could occur over {dt} hour(s).
+  Focus on:
+  - Daily routines and repetitive patterns
+  - Common interactions between objects
+  - Typical usage patterns
+  
+  Do NOT include:
+  - Unlikely accidents or "bad luck" scenarios
+  - Fringe events or rare occurrences
+  - Fantasy or unrealistic interactions
+  
+  Provide a structured timeline of realistic events.
+
+# Agent iteration prompt
+agent_iteration_prompt: |
+  Current simulation state:
+  - Day: {current_day}
+  - Hour: {current_hour}
+  - Simulation ends at: Day {max_day}, Hour {max_hour}
+  
+  Scene context from IMAGINE:
+  {imagine_context}
+  
+  Available source objects:
+  {source_objects}
+  
+  Available target objects:
+  {target_objects}
+  
+  Generate arcs for the current timestep. Each arc represents a relationship or interaction 
+  between objects happening at this time. Use COMMIT_ARC for each relationship you identify.
+  When done with this timestep, use NEXT_TIMESTAMP to advance.

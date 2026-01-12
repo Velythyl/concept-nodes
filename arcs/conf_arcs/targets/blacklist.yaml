@@ -1,0 +1,14 @@
+# Blacklist filter - exclude specific named objects
+number_to_use:
+  constant: null
+  random_min: null
+  random_max: null
+
+names_to_include: null
+
+# Example: exclude background/floor objects
+names_to_exclude:
+  - background
+  - floor
+  - ceiling
+  - wall

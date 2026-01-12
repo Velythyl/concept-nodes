@@ -1,0 +1,25 @@
+# Main configuration for arc generation
+defaults:
+  - paths/local
+  - llm: openai_gpt4
+  - sources@sources: default
+  - targets@targets: default
+  - generation: langchain
+  - _self_
+
+# Output filename for arcs
+output_filename: arcs.json
+
+# Whether to delete the LLM cache before running (useful for fresh generation)
+delete_llm_cache: true
+
+# Hydra output directory configuration
+hydra:
+  run:
+    dir: outputs/${now:%Y-%m-%d}/${now:%H-%M-%S}_arcs
+  sweep:
+    dir: outputs/${now:%Y-%m-%d}/${now:%H-%M-%S}_arcs_sweep
+    subdir: ${hydra.job.num}
+
+days: 2
+dt: 1 hour

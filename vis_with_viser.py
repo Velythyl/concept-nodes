@@ -20,6 +20,7 @@ from matplotlib.pyplot import get_cmap
 import openai
 from openai import OpenAI
 import viser
+from typing import Any
 
 from concept_graphs.utils import set_seed
 from concept_graphs.viz.utils import similarities_to_rgb
@@ -36,6 +37,8 @@ LLM_SYSTEM_PROMPT = (
 )
 
 SIMILARITY_CMAP = "RdYlGn"
+FORWARD_ARC_CMAP = "winter"  # Top half: blue-green to green
+DEPENDENCY_ARC_CMAP = "autumn"  # Bottom half: red to orangeish
 
 
 class ViserCallbackManager:
@@ -54,6 +57,7 @@ class ViserCallbackManager:
         llm_client: OpenAI | None = None,
         llm_model: str = "gpt-4o-mini",
         llm_system_prompt: str | None = None,
+        arc_states: list[dict] | None = None,
     ):
         self.server = server
         self.ft_extractor = ft_extractor  # Might be None initially
@@ -61,6 +65,10 @@ class ViserCallbackManager:
         self.llm_client = llm_client
         self.llm_model = llm_model
         self.llm_system_prompt = llm_system_prompt or LLM_SYSTEM_PROMPT
+        
+        # Store arc states (list of ArcState dicts, each with 'arcs' list)
+        self.arc_states = arc_states or []
+        self.current_arc_state_index = 0  # Index into arc_states list
 
         # Store point cloud data
         self.pcd = pcd_o3d
@@ -68,6 +76,9 @@ class ViserCallbackManager:
         self.dense_points = dense_points
         self.dense_colors = dense_colors
 
+        # Save original point clouds before any transformation
+        self.pcd_original = self.pcd
+        
         # Extract points and colors from Open3D point clouds
         self.points_list = [np.asarray(p.points).astype(np.float32) for p in self.pcd]
         self.og_colors = [np.asarray(p.colors).astype(np.float32) for p in self.pcd]
@@ -94,9 +105,12 @@ class ViserCallbackManager:
 
             try:
                 indices, signs = _parse_signed_axes(axes_ordering)
+                # Transform points
                 self.points_list = [pts[:, indices] * signs for pts in self.points_list]
                 if self.dense_points is not None:
                     self.dense_points = self.dense_points[:, indices] * signs
+                # Overwrite self.pcd with transformed point clouds
+                self.pcd = self._transform_pcd(self.pcd, indices, signs)
             except (KeyError, IndexError, ValueError):
                 log.warning(f"Invalid axes_ordering '{axes_ordering}', using 'xyz'")
 
@@ -125,6 +139,9 @@ class ViserCallbackManager:
         self.id_handles = []
         self.label_handles = []
         self.caption_handles = []
+        self.arc_handles = []
+        # Per-object label handles keyed by object id (as string)
+        self.object_labels_dict: dict[str, Any] = {}
 
         # Toggle states
         self.bbox_visible = False
@@ -132,6 +149,15 @@ class ViserCallbackManager:
         self.ids_visible = False
         self.labels_visible = False
         self.captions_visible = False
+        self.forward_arcs_visible = False
+        self.dependency_arcs_visible = False
+
+        # Arc handles split by type
+        self.forward_arc_handles = []
+        self.dependency_arc_handles = []
+
+        # GUI slider handle for arc states (set by setup_gui)
+        self.arc_state_slider = None
 
         # Stacking mode states (checkboxes)
         self.rgb_enabled = True
@@ -244,6 +270,38 @@ class ViserCallbackManager:
                 })
         return bboxes
     
+    def _transform_pcd(self, pcd_list, indices, signs):
+        """Transform Open3D point clouds with axis reordering and sign flipping.
+        
+        Creates new point clouds with transformed points while preserving colors.
+        
+        Args:
+            pcd_list: List of Open3D point clouds
+            indices: Axis indices for reordering (e.g., [0, 2, 1] for xyz)
+            signs: Sign flips as numpy array of shape (3,) with values ±1
+            
+        Returns:
+            List of new Open3D point clouds with transformed points
+        """
+        transformed_pcd = []
+        for pcd in pcd_list:
+            # Transform points
+            points = np.asarray(pcd.points).astype(np.float32)
+            points_transformed = points[:, indices] * signs
+            
+            # Create new point cloud with transformed points
+            new_pcd = o3d.geometry.PointCloud()
+            new_pcd.points = o3d.utility.Vector3dVector(points_transformed)
+            
+            # Preserve colors if they exist
+            if pcd.has_colors():
+                colors = np.asarray(pcd.colors).astype(np.float32)
+                new_pcd.colors = o3d.utility.Vector3dVector(colors)
+            
+            transformed_pcd.append(new_pcd)
+        
+        return transformed_pcd
+    
     def _extract_text_field(self, field: str, *, fallback_field: str | None = None):
         """Extract a text field from segment annotations with optional fallback."""
         if self.segments_anno is None:
@@ -274,6 +332,23 @@ class ViserCallbackManager:
             combined = " ".join([p for p in pieces if p])
             corpus.append(combined)
         return corpus
+
+    def _resolve_object_id(self, identifier):
+        """Resolve an object identifier that may be an index or label."""
+        if identifier is None:
+            return None
+        if isinstance(identifier, int):
+            return identifier
+        if isinstance(identifier, str):
+            candidate = identifier.strip()
+            try:
+                return int(candidate)
+            except ValueError:
+                pass
+            for idx, label in enumerate(self.labels):
+                if label and label.strip().lower() == candidate.lower():
+                    return idx
+        return None
 
     def register_chat_markdown(self, markdown_handle):
         """Attach the HTML/markdown handle used for chat history display."""
@@ -511,6 +586,15 @@ class ViserCallbackManager:
             handle.remove()
         self.label_handles = []
 
+        # Also remove any per-object labels managed via object_labels_dict
+        if self.object_labels_dict:
+            for handle in list(self.object_labels_dict.values()):
+                try:
+                    handle.remove()
+                except Exception:
+                    pass
+            self.object_labels_dict = {}
+
     def toggle_bbox(self):
         """Toggle bounding box visibility."""
         if self.bbox_visible:
@@ -540,8 +624,51 @@ class ViserCallbackManager:
         if self.labels_visible:
             self.remove_labels()
         else:
-            self.add_labels()
+            # Add labels per-object using the helper
+            for i in range(self.num_objects):
+                self.add_label_for_object(i)
         self.labels_visible = not self.labels_visible
+
+    def add_label_for_object(self, object_id: int, text: str | None = None, offset: np.ndarray | None = None):
+        """Add (or replace) a label for a single object.
+
+        Args:
+            object_id: Index of the object to label
+            text: Optional label text; defaults to `self.labels[object_id]`
+            offset: Optional position offset; defaults to small +Z offset
+
+        Returns:
+            The created label handle, or None if no label was added
+        """
+        key = str(object_id)
+
+        # Remove existing per-object label if present
+        if key in self.object_labels_dict:
+            try:
+                self.object_labels_dict[key].remove()
+            except Exception:
+                pass
+            del self.object_labels_dict[key]
+
+        # Resolve text; skip if empty
+        label_text = text if text is not None else (
+            self.labels[object_id] if 0 <= object_id < self.num_objects else ""
+        )
+        if not label_text:
+            return None
+
+        # Position with default small Z offset
+        base_pos = self.centroids[object_id].astype(np.float32)
+        if offset is None:
+            offset = np.array([0, 0, 0.1], dtype=np.float32)
+
+        handle = self.server.scene.add_label(
+            name=f"/labels/label_{object_id}",
+            text=label_text,
+            position=base_pos + offset,
+        )
+        self.object_labels_dict[key] = handle
+        return handle
 
     def add_captions(self):
         """Add text captions to the scene."""
@@ -568,6 +695,428 @@ class ViserCallbackManager:
         else:
             self.add_captions()
         self.captions_visible = not self.captions_visible
+
+    def get_current_arcs(self) -> list[dict]:
+        """Get arcs from the currently selected ArcState."""
+        if not self.arc_states or self.current_arc_state_index >= len(self.arc_states):
+            return []
+        return self.arc_states[self.current_arc_state_index].get("arcs", [])
+
+    def get_current_arc_state_info(self) -> str:
+        """Get a markdown string describing the current arc state (day/hour)."""
+        if not self.arc_states or self.current_arc_state_index >= len(self.arc_states):
+            return "**No arc states**"
+        state = self.arc_states[self.current_arc_state_index]
+        day = state.get("current_day", 0)
+        hour = state.get("current_hour", 0)
+        return f"**Day {day}, Hour {hour:.1f}**"
+
+    def set_arc_state_index(self, index: int):
+        """Set the current arc state index and refresh arc visualization."""
+        if not self.arc_states:
+            return
+        self.current_arc_state_index = max(0, min(index, len(self.arc_states) - 1))
+        # Refresh arcs if any are visible
+        if self.forward_arcs_visible:
+            self.add_forward_arcs()
+        if self.dependency_arcs_visible:
+            self.add_dependency_arcs()
+
+    def set_arc_state_slider(self, slider):
+        """Store reference to the arc state slider."""
+        self.arc_state_slider = slider
+
+    def _get_all_arcs_with_resolved_ids(self) -> list[tuple[int, dict]]:
+        """Get all arcs (both forward and dependency) with resolved source/target IDs.
+        
+        Returns:
+            List of (arc_index, arc_dict_with_ids) tuples for all valid arcs.
+        """
+        arcs = self.get_current_arcs()
+        if not arcs:
+            return []
+        
+        all_arcs_with_ids = []
+        for i, arc in enumerate(arcs):
+            raw_source = arc.get("source")
+            raw_target = arc.get("target")
+            source_id = self._resolve_object_id(raw_source)
+            target_id = self._resolve_object_id(raw_target)
+            
+            # Skip invalid arcs
+            if source_id is None or target_id is None:
+                continue
+            if source_id >= self.num_objects or target_id >= self.num_objects:
+                continue
+            
+            arc_with_ids = arc.copy()
+            arc_with_ids["source_id"] = source_id
+            arc_with_ids["target_id"] = target_id
+            all_arcs_with_ids.append((i, arc_with_ids))
+        
+        return all_arcs_with_ids
+
+    def _detect_arc_overlaps_all(self) -> dict:
+        """Detect overlapping arcs across ALL arc types and assign offsets.
+        
+        This considers both forward and dependency arcs together to properly
+        handle bidirectional cases where S->T might be forward and T->S might
+        be dependency.
+        
+        Returns a dict mapping arc index to (offset_multiplier, total_overlaps, is_reversed).
+        """
+        all_arcs = self._get_all_arcs_with_resolved_ids()
+        if not all_arcs:
+            return {}
+        
+        # Group arcs by their source-target pair (canonicalized for bidirectional detection)
+        arc_groups = {}  # Maps (min_id, max_id) -> list of (arc_idx, is_reversed) tuples
+        
+        for idx, arc in all_arcs:
+            source = arc.get("source_id")
+            target = arc.get("target_id")
+            
+            # Create canonical key (sorted IDs) to detect bidirectional arcs
+            canonical_source = min(source, target)
+            canonical_target = max(source, target)
+            key = (canonical_source, canonical_target)
+            
+            # Track whether this arc is "reversed" relative to canonical direction
+            is_reversed = source > target
+            
+            if key not in arc_groups:
+                arc_groups[key] = []
+            arc_groups[key].append((idx, is_reversed))
+        
+        # Assign offsets to overlapping arcs
+        offset_map = {}  # Maps arc_idx -> (offset_multiplier, total_overlaps, is_reversed)
+        for key, arc_info_list in arc_groups.items():
+            num_arcs = len(arc_info_list)
+            if num_arcs > 1:
+                log.info(f"Arc group {key}: {num_arcs} arcs -> {arc_info_list}")
+                # Multiple arcs between same objects - spread them out
+                for i, (arc_idx, is_reversed) in enumerate(arc_info_list):
+                    # Distribute offsets: -n, -(n-1), ..., -1, 0, 1, ..., n
+                    # For even count: offset from center, for odd: center one at 0
+                    if num_arcs % 2 == 1:
+                        # Odd number: center arc gets 0, others distributed around it
+                        offset_multiplier = i - num_arcs // 2
+                    else:
+                        # Even number: no arc at exact center
+                        offset_multiplier = i - num_arcs // 2 + 0.5
+                    
+                    offset_map[arc_idx] = (offset_multiplier, num_arcs, is_reversed)
+                    log.info(f"  Arc {arc_idx}: offset={offset_multiplier}, reversed={is_reversed}")
+        
+        if offset_map:
+            log.info(f"Final offset_map: {offset_map}")
+        return offset_map
+
+    def _detect_arc_overlaps(self, typed_arcs: list) -> dict:
+        """Detect overlapping arcs and assign offsets to separate them.
+        
+        Returns a dict mapping arc index to (offset_multiplier, total_overlaps) where:
+        - offset_multiplier: integer offset (-n to +n) to apply to this arc
+        - total_overlaps: total number of arcs in this overlap group
+        
+        For bidirectional arcs (S->T and T->S), we use a consistent perpendicular direction
+        based on the canonical (sorted) source-target pair to ensure arcs are separated.
+        """
+        # Use the global overlap detection that considers ALL arc types
+        return self._detect_arc_overlaps_all()
+
+    def _add_arcs_by_type(self, arc_type: str, cmap_name: str, name_prefix: str) -> list:
+        """Add arcs of a specific type to the scene.
+        
+        Args:
+            arc_type: 'forward' or 'dependency'
+            cmap_name: Name of the colormap to use
+            name_prefix: Prefix for scene object names
+            
+        Returns:
+            List of created handles
+        """
+        handles = []
+        arcs = self.get_current_arcs()
+        
+        if not arcs:
+            return handles
+        
+        cmap = get_cmap(cmap_name)
+        
+        # Filter arcs by type and add resolved IDs for overlap detection
+        typed_arcs_with_ids = []
+        for i, arc in enumerate(arcs):
+            if arc.get("arc_type") != arc_type:
+                continue
+                
+            raw_source = arc.get("source")
+            raw_target = arc.get("target")
+            source_id = self._resolve_object_id(raw_source)
+            target_id = self._resolve_object_id(raw_target)
+            
+            # Validate source and target indices early
+            if source_id is None or target_id is None:
+                log.warning(
+                    f"Arc {i} missing or unresolved source/target ({raw_source} -> {raw_target}), skipping"
+                )
+                continue
+            if source_id >= self.num_objects or target_id >= self.num_objects:
+                log.warning(f"Arc {i} has invalid object indices ({source_id} -> {target_id}), skipping")
+                continue
+            
+            # Store resolved IDs in arc dict for overlap detection
+            arc_with_ids = arc.copy()
+            arc_with_ids["source_id"] = source_id
+            arc_with_ids["target_id"] = target_id
+            typed_arcs_with_ids.append((i, arc_with_ids))
+        
+        # Detect overlapping arcs and get offset information
+        offset_map = self._detect_arc_overlaps(typed_arcs_with_ids)
+        
+        for i, arc in typed_arcs_with_ids:
+            source_id = arc["source_id"]
+            target_id = arc["target_id"]
+            weight = arc.get("weight", 0.5)
+            label = arc.get("label", "")
+            
+            # Get source and target centroids
+            source_pos = self.centroids[source_id]
+            target_pos = self.centroids[target_id]
+
+            # Add labels for the interacting objects
+            self.add_label_for_object(source_id)
+            self.add_label_for_object(target_id)
+            
+            # Compute arc height based on distance between objects
+            distance = np.linalg.norm(target_pos - source_pos)
+            arc_height = min(3, distance * 0.4)  # Arc rises proportionally to distance
+            
+            # Compute midpoint and raise it above the scene
+            midpoint = (source_pos + target_pos) / 2
+            midpoint_raised = midpoint.copy()
+            midpoint_raised[2] += arc_height  # Raise in Z (up) direction
+            
+            # Compute perpendicular offset for overlapping arcs (including bidirectional S->T, T->S)
+            perp_offset = np.zeros(3, dtype=np.float32)
+            if i in offset_map:
+                offset_multiplier, total_overlaps, is_reversed = offset_map[i]
+                
+                # Use CANONICAL arc direction (from lower ID to higher ID) to ensure
+                # consistent perpendicular direction for bidirectional arcs.
+                # This way S->T and T->S use the same perpendicular reference.
+                if is_reversed:
+                    canonical_direction = source_pos - target_pos  # Flip to canonical
+                else:
+                    canonical_direction = target_pos - source_pos
+                
+                arc_direction_norm = np.linalg.norm(canonical_direction[:2])  # Use only XY plane
+                
+                if arc_direction_norm > 1e-6:
+                    # Perpendicular vector in XY plane (rotate 90 degrees left of canonical direction)
+                    perp_direction = np.array([-canonical_direction[1], canonical_direction[0], 0])
+                    perp_direction = perp_direction / np.linalg.norm(perp_direction)
+                    
+                    # Dynamically scale offset based on number of overlapping arcs
+                    # Total spread is capped but grows with more arcs, then divided evenly
+                    max_total_spread = min(2.0, distance * 0.4)  # Max spread across all arcs
+                    min_arc_spacing = 0.15  # Minimum spacing between adjacent arcs
+                    
+                    # Calculate spacing: use larger of even distribution or minimum spacing
+                    # For N arcs, we need (N-1) gaps to cover the spread
+                    even_spacing = max_total_spread / max(1, total_overlaps - 1) if total_overlaps > 1 else 0
+                    arc_spacing = max(min_arc_spacing, even_spacing)
+                    
+                    # Apply offset: multiplier is centered around 0, so multiply by spacing
+                    offset_distance = offset_multiplier * arc_spacing
+                    
+                    # Store the offset vector to apply to all control points
+                    perp_offset = perp_direction * offset_distance
+            
+            # Apply offset to the midpoint
+            midpoint_raised += perp_offset
+            
+            # Create control points for Catmull-Rom spline
+            # We need at least 4 points for Catmull-Rom; use extended endpoints
+            # Apply perpendicular offset to all control points so bidirectional arcs are fully separated
+            post_source = source_pos + np.array([0, 0, arc_height * 0.1]) + perp_offset
+            pre_target = target_pos + np.array([0, 0, arc_height * 0.1]) + perp_offset
+            
+            control_points = np.array([
+                source_pos,
+                post_source,
+                midpoint_raised,
+                pre_target,
+                target_pos,
+            ], dtype=np.float32)
+            
+            # Get color from colormap based on weight
+            # For forward arcs: use top half of winter (0.5 to 1.0)
+            # For dependency arcs: use bottom half of autumn (0.0 to 0.5)
+            if arc_type == "forward":
+                cmap_value = 0.5 + weight * 0.5  # Map [0,1] to [0.5,1]
+            else:  # dependency
+                cmap_value = weight * 0.5  # Map [0,1] to [0,0.5]
+            r, g, b, _ = cmap(cmap_value)
+            color_uint8 = (int(r * 255), int(g * 255), int(b * 255))
+            
+            # Add the spline
+            handle = self.server.scene.add_spline_catmull_rom(
+                name=f"/{name_prefix}/arc_{i}",
+                positions=control_points,
+                tension=0.5,
+                line_width=3.0,
+                color=color_uint8,
+                segments=50,
+            )
+            handles.append(handle)
+
+            # Sample points along the spline to add arrow heads
+            spline_points = self._sample_catmull_rom_spline(control_points, num_samples=50)
+            
+            # Add arrow heads at intervals along the spline
+            arrow_interval = 5  # Add an arrow every N points
+            arrow_length = 0.15
+            arrow_angle = np.radians(30)  # 30 degrees offset
+            
+            for j in range(arrow_interval, len(spline_points) - 1, arrow_interval):
+                point = spline_points[j]
+                next_point = spline_points[j + 1]
+                
+                # Compute tangent direction (pointing towards target)
+                tangent = next_point - point
+                tangent_norm = np.linalg.norm(tangent)
+                if tangent_norm < 1e-6:
+                    continue
+                tangent = tangent / tangent_norm
+                
+                # Find a perpendicular vector (in the plane containing tangent and up)
+                up = np.array([0.0, 0.0, 1.0])
+                perp = np.cross(tangent, up)
+                perp_norm = np.linalg.norm(perp)
+                if perp_norm < 1e-6:
+                    # Tangent is parallel to up, use a different reference
+                    up = np.array([1.0, 0.0, 0.0])
+                    perp = np.cross(tangent, up)
+                    perp_norm = np.linalg.norm(perp)
+                perp = perp / perp_norm
+                
+                # Create arrow wing directions (rotated from -tangent by +/- arrow_angle)
+                back_dir = -tangent
+                
+                # Rotate back_dir around perp by +/- arrow_angle
+                cos_a = np.cos(arrow_angle)
+                sin_a = np.sin(arrow_angle)
+                
+                # Wing 1: rotate back_dir by +arrow_angle around perp
+                wing1_dir = back_dir * cos_a + np.cross(perp, back_dir) * sin_a + perp * np.dot(perp, back_dir) * (1 - cos_a)
+                wing1_dir = wing1_dir / np.linalg.norm(wing1_dir)
+                
+                # Wing 2: rotate back_dir by -arrow_angle around perp  
+                wing2_dir = back_dir * cos_a - np.cross(perp, back_dir) * sin_a + perp * np.dot(perp, back_dir) * (1 - cos_a)
+                wing2_dir = wing2_dir / np.linalg.norm(wing2_dir)
+                
+                # Create a second perpendicular axis (perpendicular to both tangent and perp)
+                perp2 = np.cross(tangent, perp)
+                perp2 = perp2 / np.linalg.norm(perp2)
+                
+                # Wing 3: rotate back_dir by +arrow_angle around perp2
+                wing3_dir = back_dir * cos_a + np.cross(perp2, back_dir) * sin_a + perp2 * np.dot(perp2, back_dir) * (1 - cos_a)
+                wing3_dir = wing3_dir / np.linalg.norm(wing3_dir)
+                
+                # Wing 4: rotate back_dir by -arrow_angle around perp2
+                wing4_dir = back_dir * cos_a - np.cross(perp2, back_dir) * sin_a + perp2 * np.dot(perp2, back_dir) * (1 - cos_a)
+                wing4_dir = wing4_dir / np.linalg.norm(wing4_dir)
+                
+                # Create line segments for the arrow wings
+                wing1_start = point + wing1_dir * arrow_length
+                wing2_start = point + wing2_dir * arrow_length
+                wing3_start = point + wing3_dir * arrow_length
+                wing4_start = point + wing4_dir * arrow_length
+                
+                # Add arrow wings
+                for wing_idx, wing_start in enumerate([wing1_start, wing2_start, wing3_start, wing4_start], 1):
+                    arrow_handle = self.server.scene.add_line_segments(
+                        name=f"/{name_prefix}/arc_{i}/arrow_{j}_wing{wing_idx}",
+                        points=np.array([[wing_start, point]], dtype=np.float32),
+                        colors=color_uint8,
+                        line_width=2.0,
+                    )
+                    handles.append(arrow_handle)
+
+            # Add label at the midpoint if provided
+            if label:
+                label_handle = self.server.scene.add_label(
+                    name=f"/{name_prefix}/arc_label_{i}",
+                    text=f"{label}",
+                    position=midpoint_raised.astype(np.float32) + np.array([0, 0, 0.3], dtype=np.float32),
+                )
+                handles.append(label_handle)
+        
+        return handles
+
+    def add_forward_arcs(self):
+        """Add forward arcs to the scene using the forward colormap."""
+        self.remove_forward_arcs()
+        self.forward_arc_handles = self._add_arcs_by_type("forward", FORWARD_ARC_CMAP, "forward_arcs")
+
+    def remove_forward_arcs(self):
+        """Remove all forward arc handles."""
+        for handle in self.forward_arc_handles:
+            handle.remove()
+        self.forward_arc_handles = []
+
+    def add_dependency_arcs(self):
+        """Add dependency arcs to the scene using the dependency colormap."""
+        self.remove_dependency_arcs()
+        self.dependency_arc_handles = self._add_arcs_by_type("dependency", DEPENDENCY_ARC_CMAP, "dependency_arcs")
+
+    def remove_dependency_arcs(self):
+        """Remove all dependency arc handles."""
+        for handle in self.dependency_arc_handles:
+            handle.remove()
+        self.dependency_arc_handles = []
+
+    def remove_arcs(self):
+        """Remove all arc handles (both forward and dependency)."""
+        self.remove_forward_arcs()
+        self.remove_dependency_arcs()
+        # Also clear old-style arc_handles if any remain
+        for handle in self.arc_handles:
+            handle.remove()
+        self.arc_handles = []
+
+    def toggle_forward_arcs(self):
+        """Toggle forward arc visibility."""
+        if self.forward_arcs_visible:
+            self.remove_forward_arcs()
+        else:
+            self.add_forward_arcs()
+        self.forward_arcs_visible = not self.forward_arcs_visible
+
+    def toggle_dependency_arcs(self):
+        """Toggle dependency arc visibility."""
+        if self.dependency_arcs_visible:
+            self.remove_dependency_arcs()
+        else:
+            self.add_dependency_arcs()
+        self.dependency_arcs_visible = not self.dependency_arcs_visible
+
+    def toggle_all_arcs(self):
+        """Toggle all arcs (both forward and dependency)."""
+        # Determine target state: if any are visible, hide all; otherwise show all
+        any_visible = self.forward_arcs_visible or self.dependency_arcs_visible
+        
+        if any_visible:
+            self.remove_forward_arcs()
+            self.remove_dependency_arcs()
+            self.forward_arcs_visible = False
+            self.dependency_arcs_visible = False
+        else:
+            self.add_forward_arcs()
+            self.add_dependency_arcs()
+            self.forward_arcs_visible = True
+            self.dependency_arcs_visible = True
 
     def toggle_rgb_mode(self, enabled: bool):
         """Toggle RGB color mode."""
@@ -616,6 +1165,53 @@ class ViserCallbackManager:
         self._set_cmap_visibility(True)
         self.update_point_clouds()
         self._update_centroid_colors()
+
+    def _sample_catmull_rom_spline(self, control_points: np.ndarray, num_samples: int = 50) -> np.ndarray:
+        """Sample points along a Catmull-Rom spline.
+        
+        Args:
+            control_points: Array of shape (N, 3) with control points
+            num_samples: Total number of samples along the entire spline
+            
+        Returns:
+            Array of shape (num_samples, 3) with sampled points
+        """
+        n = len(control_points)
+        if n < 4:
+            return control_points
+        
+        # Catmull-Rom spline interpolation
+        def catmull_rom_point(p0, p1, p2, p3, t, tension=0.5):
+            """Compute a point on a Catmull-Rom spline segment."""
+            t2 = t * t
+            t3 = t2 * t
+            
+            # Catmull-Rom basis matrix (with tension parameter)
+            s = (1 - tension) / 2
+            
+            return (
+                p1 +
+                (-s * p0 + s * p2) * t +
+                (2*s * p0 + (s-3) * p1 + (3-2*s) * p2 - s * p3) * t2 +
+                (-s * p0 + (2-s) * p1 + (s-2) * p2 + s * p3) * t3
+            )
+        
+        samples = []
+        # Number of segments is n-3 for Catmull-Rom (we use overlapping windows of 4 points)
+        num_segments = n - 3
+        samples_per_segment = max(1, num_samples // num_segments)
+        
+        for i in range(num_segments):
+            p0, p1, p2, p3 = control_points[i:i+4]
+            for j in range(samples_per_segment):
+                t = j / samples_per_segment
+                point = catmull_rom_point(p0, p1, p2, p3, t)
+                samples.append(point)
+        
+        # Add the final point
+        samples.append(control_points[-2])  # p2 of the last segment
+        
+        return np.array(samples, dtype=np.float32)
 
     def _update_centroid_colors(self):
         """Update centroid colors to match current scheme."""
@@ -840,7 +1436,7 @@ class ViserCallbackManager:
 
 
 def load_point_cloud(path):
-    """Load point cloud, dense cloud arrays, and segment annotations."""
+    """Load point cloud, dense cloud arrays, segment annotations, and arcs."""
     path = Path(path)
     pcd = o3d.io.read_point_cloud(str(path / "point_cloud.pcd"))
     dense_path = path / "dense_point_cloud.pcd"
@@ -856,13 +1452,24 @@ def load_point_cloud(path):
     with open(path / "segments_anno.json", "r") as f:
         segments_anno = json.load(f)
 
+    # Load arc states if available (new format: list of ArcState dicts)
+    arcs_path = path / "arcs.json"
+    arc_states = None
+    if arcs_path.exists():
+        with open(arcs_path, "r") as f:
+            arc_states = json.load(f)
+        total_arcs = sum(len(s.get("arcs", [])) for s in arc_states) if arc_states else 0
+        log.info(f"Loaded {len(arc_states)} arc states with {total_arcs} total arcs from {arcs_path}")
+    else:
+        log.info("No arcs.json found at %s", arcs_path)
+
     # Build individual point clouds for each segment
     pcd_o3d = []
     for ann in segments_anno["segGroups"]:
         obj = pcd.select_by_index(ann["segments"])
         pcd_o3d.append(obj)
 
-    return pcd_o3d, segments_anno, dense_points, dense_colors
+    return pcd_o3d, segments_anno, dense_points, dense_colors, arc_states
 
 
 def setup_gui(server: viser.ViserServer, manager: ViserCallbackManager):
@@ -949,6 +1556,45 @@ def setup_gui(server: viser.ViserServer, manager: ViserCallbackManager):
         @caption_btn.on_click
         def _(_):
             manager.toggle_captions()
+
+    with server.gui.add_folder("Arcs"):
+        # Slider for selecting arc state (timestep)
+        num_states = len(manager.arc_states) if manager.arc_states else 1
+        arc_state_slider = server.gui.add_slider(
+            "Timestep",
+            min=0,
+            max=max(0, num_states - 1),
+            step=1,
+            initial_value=0,
+        )
+        manager.set_arc_state_slider(arc_state_slider)
+        
+        # Display current state info
+        arc_state_label = server.gui.add_markdown(
+            content=manager.get_current_arc_state_info(),
+        )
+        
+        @arc_state_slider.on_update
+        def _(event):
+            manager.set_arc_state_index(int(arc_state_slider.value))
+            arc_state_label.content = manager.get_current_arc_state_info()
+        
+        # Toggle buttons for different arc types
+        forward_arcs_btn = server.gui.add_button("Toggle Forward Arcs")
+        dependency_arcs_btn = server.gui.add_button("Toggle Dependency Arcs")
+        all_arcs_btn = server.gui.add_button("Toggle All Arcs")
+
+        @forward_arcs_btn.on_click
+        def _(_):
+            manager.toggle_forward_arcs()
+
+        @dependency_arcs_btn.on_click
+        def _(_):
+            manager.toggle_dependency_arcs()
+
+        @all_arcs_btn.on_click
+        def _(_):
+            manager.toggle_all_arcs()
 
     with server.gui.add_folder("CLIP Query"):
         # Query input
@@ -1097,9 +1743,11 @@ def main(cfg: DictConfig):
     set_seed(cfg.seed)
     path = Path(cfg.map_path)
     clip_ft = np.load(path / "clip_features.npy")
-    pcd_o3d, segments_anno, dense_points, dense_colors = load_point_cloud(path)
+    pcd_o3d, segments_anno, dense_points, dense_colors, arc_states = load_point_cloud(path)
 
     log.info(f"Loading map with a total of {len(pcd_o3d)} objects")
+    if arc_states:
+        log.info(f"Loaded {len(arc_states)} arc states")
 
     openai.api_key = os.getenv("OPENAI_API_KEY")
     if not openai.api_key:
@@ -1123,6 +1771,7 @@ def main(cfg: DictConfig):
         llm_client=llm_client,
         llm_model=cfg.llm_model,
         llm_system_prompt=LLM_SYSTEM_PROMPT,
+        arc_states=arc_states,
     )
     manager.set_llm_client(llm_client, cfg.llm_model)
 

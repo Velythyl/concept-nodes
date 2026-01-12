@@ -1,0 +1,13 @@
+# Whitelist filter - only include specific named objects
+number_to_use:
+  constant: null
+  random_min: null
+  random_max: null
+
+# Example: only include these object labels
+names_to_include:
+  - lamp
+  - monitor
+  - keyboard
+
+names_to_exclude: null

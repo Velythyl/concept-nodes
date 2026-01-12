@@ -1,0 +1,7 @@
+# Limited filter - only consider top N objects
+defaults:
+  - default
+
+# Limit to top 10 sources and targets
+num_sources: 10
+num_targets: 10
