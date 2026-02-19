@@ -22,6 +22,61 @@ import visualizer
 # A logger for this file
 log = logging.getLogger(__name__)
 
+LEGACY_VIS_AXES_ORDERING = "-xzy"
+LEGACY_VIS_FLOOR_AXIS = "y"
+
+
+def _map_axes_meta_from_cfg(cfg: DictConfig) -> dict:
+    """Build map axis metadata, preserving legacy visualizer behavior by default."""
+    axes_ordering = cfg.get("axes_ordering", LEGACY_VIS_AXES_ORDERING)
+    floor_axis = cfg.get("floor_axis", LEGACY_VIS_FLOOR_AXIS)
+    return {
+        "axes_ordering": str(axes_ordering),
+        "floor_axis": str(floor_axis),
+        "point_size": 0.023,
+        "point_count": 1.0,
+    }
+
+
+def _save_map_meta(map_dir: Path, meta: dict):
+    """Persist per-map metadata under map_dir/meta.json."""
+    meta_path = map_dir / "meta.json"
+    with open(meta_path, "w") as f:
+        json.dump(meta, f, indent=2)
+
+
+def _looks_like_saved_map_dir(path: Path) -> bool:
+    return (path / "point_cloud.pcd").exists() or (path / "dense_point_cloud.pcd").exists()
+
+
+def _backfill_output_meta(output_root: Path, meta: dict):
+    """Ensure each saved map in output_root has meta.json."""
+    if not output_root.exists() or not output_root.is_dir():
+        return
+
+    candidate_dirs: set[Path] = set()
+    if _looks_like_saved_map_dir(output_root):
+        candidate_dirs.add(output_root)
+
+    for cloud_file in output_root.rglob("point_cloud.pcd"):
+        candidate_dirs.add(cloud_file.parent)
+
+    for cloud_file in output_root.rglob("dense_point_cloud.pcd"):
+        candidate_dirs.add(cloud_file.parent)
+
+    saved_count = 0
+    for map_dir in sorted(candidate_dirs):
+        if not _looks_like_saved_map_dir(map_dir):
+            continue
+        meta_path = map_dir / "meta.json"
+        if meta_path.exists():
+            continue
+        _save_map_meta(map_dir, meta)
+        saved_count += 1
+
+    if saved_count > 0:
+        log.info("Backfilled meta.json for %d existing map(s) in %s", saved_count, output_root)
+
 
 @hydra.main(version_base=None, config_path="conf", config_name="strayscanner")
 def main(cfg: DictConfig):
@@ -54,6 +109,8 @@ def main(cfg: DictConfig):
     output_dir_map = None
     if cfg.save_map:
         output_dir = Path(cfg.output_dir)
+        map_meta = _map_axes_meta_from_cfg(cfg)
+        _backfill_output_meta(output_dir, map_meta)
         now = datetime.datetime.now()
         date_time = now.strftime("%Y-%m-%d-%H-%M-%S.%f")
         output_dir_map = output_dir / f"{dataset.name}_{cfg.name}_{date_time}"
@@ -178,6 +235,7 @@ def main(cfg: DictConfig):
 
     # Hydra config
     OmegaConf.save(cfg, output_dir_map / "config.yaml")
+    _save_map_meta(output_dir_map, _map_axes_meta_from_cfg(cfg))
 
     # Few more stats
     stats = dict(fps=fps, mapping_time=mapping_time, n_objects=n_objects, n_frames=len(dataset))

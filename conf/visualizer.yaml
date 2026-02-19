@@ -1,10 +1,50 @@
 defaults:
   - ft_extraction: CLIP_H14
   - paths: local
+  - agent: agent
   - _self_
 
 map_path: ${output_dir}/latest_map
 mode: "gui"
 device: mps
 seed: 42
+axes_ordering: "xyz"
+floor_axis: "z"
+
+# LLM used for the one-shot query panel (non-agent)
 llm_model: gpt-4o-mini
+
+# ── GUI section controls ────────────────────────────────────────────────
+# For every GUI folder you can set:
+#   visible:  false → the folder is not rendered at all
+#   expanded: true/false → initial collapsed / expanded state
+
+# Master flag – when false the Arcs folder is hidden and arc data is not loaded
+arcs_enabled: true
+
+gui:
+  visualization:
+    visible: true
+    expanded: true
+  toggles:
+    visible: true
+    expanded: true
+  arcs:
+    # Only honoured when arcs_enabled is true
+    visible: true
+    expanded: true
+  clip_query:
+    visible: true
+    expanded: true
+  llm_query:
+    visible: true
+    expanded: false
+  agent:
+    visible: true
+    expanded: false
+  data_collection:
+    visible: true
+    expanded: false
+  box_annotator:
+    visible: true
+    expanded: false
