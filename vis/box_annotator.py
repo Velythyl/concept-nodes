@@ -295,9 +295,6 @@ class BoxAnnotatorController:
         # Re-entrancy guard: skip cascading callbacks while updating state
         self._updating = False
 
-        # Debounce timers for gizmo rebuild after rotation ends
-        self._gizmo_rebuild_timers: dict[str, threading.Timer] = {}
-        self._multi_handles_rebuild_timer: threading.Timer | None = None
         self._suppress_multi_gizmo_events = False
 
         # Flag: is box selection mode active?
@@ -381,10 +378,6 @@ class BoxAnnotatorController:
                 pass
 
     def _remove_multi_selection_handles(self):
-        if self._multi_handles_rebuild_timer is not None:
-            self._multi_handles_rebuild_timer.cancel()
-            self._multi_handles_rebuild_timer = None
-
         for obj in [
             self._multi_handles.gizmo_handle,
             self._multi_handles.wire_handle,
@@ -452,6 +445,10 @@ class BoxAnnotatorController:
             def _on_multi_gizmo_update(event: viser.TransformControlsEvent):
                 self._on_multi_central_gizmo_moved(event)
 
+            @gizmo.on_drag_end
+            def _on_multi_gizmo_drag_end(event: viser.TransformControlsEvent):
+                self._on_multi_central_gizmo_drag_end()
+
             corner_handles: list[Any] = []
             corner_gizmos: list[Any] = []
             multi_wxyz = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float64)
@@ -482,6 +479,10 @@ class BoxAnnotatorController:
                     _signs_=_signs,
                 ):
                     self._on_multi_corner_handle_moved(_ci_, _signs_, event)
+
+                @corner_gizmo.on_drag_end
+                def _on_multi_corner_drag_end(event: viser.TransformControlsEvent):
+                    self._on_multi_corner_drag_end()
 
             self._multi_handles = _MultiSelectionHandles(
                 gizmo_handle=gizmo,
@@ -836,9 +837,6 @@ class BoxAnnotatorController:
 
     def delete_box(self, box_id: str):
         """Remove a box from the scene and from internal state."""
-        timer = self._gizmo_rebuild_timers.pop(box_id, None)
-        if timer is not None:
-            timer.cancel()
         with self._lock:
             box = self._boxes.pop(box_id, None)
             handles = self._handles.pop(box_id, None)
@@ -960,6 +958,12 @@ class BoxAnnotatorController:
             event: viser.TransformControlsEvent, _bid=bid
         ):
             self._on_central_gizmo_moved(_bid, event)
+
+        @gizmo.on_drag_end
+        def _on_gizmo_drag_end(
+            event: viser.TransformControlsEvent, _bid=bid
+        ):
+            self._on_central_gizmo_drag_end(_bid)
 
         # Label floating above box
         label_offset = np.array([0.0, 0.0, box.dimensions[2] / 2 + 0.08])
@@ -1233,7 +1237,9 @@ class BoxAnnotatorController:
         self._update_box_in_place(box, update_gizmo=update_gizmo)
 
     def _on_central_gizmo_moved(
-        self, box_id: str, event: viser.TransformControlsEvent
+        self,
+        box_id: str,
+        event: viser.TransformControlsEvent,
     ):
         """Handle the central transform gizmo being dragged (translate or rotate)."""
         box = self._boxes.get(box_id)
@@ -1272,8 +1278,6 @@ class BoxAnnotatorController:
             if box_id in self._selected_ids and not self.is_multi_selected:
                 self._sync_gui_to_box(box)
 
-            # After the user lets go, snap gizmo back to axis-aligned
-            self._schedule_gizmo_rebuild(box_id)
             self._mark_out_of_sync()
 
         elif pos_changed:
@@ -1287,10 +1291,15 @@ class BoxAnnotatorController:
 
             if box.id in self._selected_ids and not self.is_multi_selected:
                 self._sync_gui_to_box(box)
-            self._schedule_gizmo_rebuild(box_id)
             self._mark_out_of_sync()
 
-    def _on_multi_central_gizmo_moved(self, event: viser.TransformControlsEvent):
+    def _on_multi_central_gizmo_drag_end(self):
+        self._reset_multi_gizmo_pose()
+
+    def _on_multi_central_gizmo_moved(
+        self,
+        event: viser.TransformControlsEvent,
+    ):
         if len(self._selected_ids) <= 1:
             return
         if self._suppress_multi_gizmo_events:
@@ -1335,7 +1344,6 @@ class BoxAnnotatorController:
                     bbox_max,
                     update_gizmo_pose=False,
                 )
-            self._schedule_multi_gizmo_reset()
             self._mark_out_of_sync()
         elif pos_changed:
             delta = new_pos - prev_pos
@@ -1351,8 +1359,10 @@ class BoxAnnotatorController:
                     bbox_max,
                     update_gizmo_pose=False,
                 )
-            self._schedule_multi_gizmo_reset()
             self._mark_out_of_sync()
+
+    def _on_central_gizmo_drag_end(self, box_id: str):
+        self._reset_single_gizmo_pose(box_id)
 
     def _on_multi_corner_handle_moved(
         self,
@@ -1428,8 +1438,12 @@ class BoxAnnotatorController:
             new_max,
             update_gizmo_pose=True,
         )
-        self._schedule_multi_handles_rebuild()
         self._mark_out_of_sync()
+
+    def _on_multi_corner_drag_end(self):
+        if len(self._selected_ids) <= 1:
+            return
+        self._create_or_update_multi_selection_handles()
 
     def _update_box_in_place(
         self,
@@ -1483,64 +1497,28 @@ class BoxAnnotatorController:
         if self.is_multi_selected and box.id in self._selected_ids:
             self._set_per_box_controls_visible(box.id, False)
 
-    def _schedule_gizmo_rebuild(self, box_id: str):
-        """Debounced gizmo snap-to-identity after central drag ends."""
-        old = self._gizmo_rebuild_timers.pop(box_id, None)
-        if old is not None:
-            old.cancel()
+    def _reset_single_gizmo_pose(self, box_id: str):
+        box = self._boxes.get(box_id)
+        handles = self._handles.get(box_id)
+        if box is None or handles is None:
+            return
+        self._set_gizmo_pose_from_center(handles, box.center, box.wxyz)
+        if box_id in self._selected_ids:
+            self._update_box_color(box_id, selected=True)
 
-        def _rebuild():
-            self._gizmo_rebuild_timers.pop(box_id, None)
-            box = self._boxes.get(box_id)
-            handles = self._handles.get(box_id)
-            if box is None or handles is None:
-                return
-            self._set_gizmo_pose_from_center(handles, box.center, box.wxyz)
-            if box_id in self._selected_ids:
-                self._update_box_color(box_id, selected=True)
-
-        t = threading.Timer(0.12, _rebuild)
-        self._gizmo_rebuild_timers[box_id] = t
-        t.start()
-
-    def _schedule_multi_gizmo_reset(self):
-        """Debounced snap of the multi-selection gizmo to identity orientation."""
-        if self._multi_handles_rebuild_timer is not None:
-            self._multi_handles_rebuild_timer.cancel()
-
-        def _reset():
-            self._multi_handles_rebuild_timer = None
-            if len(self._selected_ids) <= 1:
-                return
-            h = self._multi_handles
-            if h.gizmo_handle is None:
-                return
-            aabb = self._compute_selection_aabb()
-            if aabb is None:
-                return
-            center, _, bbox_min, bbox_max = aabb
-            self._set_gizmo_pose_from_center(h, center, np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float64))
-            h.bbox_min = bbox_min.copy()
-            h.bbox_max = bbox_max.copy()
-
-        t = threading.Timer(0.12, _reset)
-        self._multi_handles_rebuild_timer = t
-        t.start()
-
-    def _schedule_multi_handles_rebuild(self):
-        """Debounced redraw of multi-selection container handles after drag release."""
-        if self._multi_handles_rebuild_timer is not None:
-            self._multi_handles_rebuild_timer.cancel()
-
-        def _rebuild():
-            self._multi_handles_rebuild_timer = None
-            if len(self._selected_ids) <= 1:
-                return
-            self._create_or_update_multi_selection_handles()
-
-        t = threading.Timer(0.2, _rebuild)
-        self._multi_handles_rebuild_timer = t
-        t.start()
+    def _reset_multi_gizmo_pose(self):
+        if len(self._selected_ids) <= 1:
+            return
+        h = self._multi_handles
+        if h.gizmo_handle is None:
+            return
+        aabb = self._compute_selection_aabb()
+        if aabb is None:
+            return
+        center, _, bbox_min, bbox_max = aabb
+        self._set_gizmo_pose_from_center(h, center, np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float64))
+        h.bbox_min = bbox_min.copy()
+        h.bbox_max = bbox_max.copy()
 
     # ── GUI callbacks ────────────────────────────────────────────────────
 
