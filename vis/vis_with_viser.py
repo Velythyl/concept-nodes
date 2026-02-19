@@ -15,6 +15,7 @@ import tempfile
 import gc
 from functools import cached_property
 from http.server import SimpleHTTPRequestHandler
+import socket
 import socketserver
 
 import numpy as np
@@ -1339,6 +1340,21 @@ def _has_any_videos(map_path: Path) -> bool:
     return False
 
 
+def _resolve_available_port(preferred_port: int, host: str = "0.0.0.0") -> int:
+    """Return preferred_port if available, otherwise pick an ephemeral free port."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            sock.bind((host, preferred_port))
+            return preferred_port
+        except OSError:
+            pass
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind((host, 0))
+        return int(sock.getsockname()[1])
+
+
 @hydra.main(version_base=None, config_path="../conf", config_name="visualizer")
 def main(cfg: DictConfig):
     set_seed(cfg.seed)
@@ -1358,7 +1374,14 @@ def main(cfg: DictConfig):
         log.warning("OPENAI_API_KEY not set; LLM query and agent features will be disabled")
 
     # Create Viser server
-    viser_port = int(os.getenv("VISER_PORT", "8765"))
+    requested_viser_port = int(os.getenv("VISER_PORT", "8765"))
+    viser_port = _resolve_available_port(requested_viser_port)
+    if viser_port != requested_viser_port:
+        log.warning(
+            "VISER_PORT %s is in use; using available port %s instead",
+            requested_viser_port,
+            viser_port,
+        )
     server = viser.ViserServer(host="0.0.0.0", port=viser_port)
     log.info("Viser server started at http://localhost:%s", viser_port)
 
@@ -1432,7 +1455,14 @@ def main(cfg: DictConfig):
     box_annotator_refresh = setup_gui(server, manager, cfg)
     
     # Start HTTP server for video in background
-    video_port = int(os.getenv("VISER_VIDEO_PORT", "8766"))
+    requested_video_port = int(os.getenv("VISER_VIDEO_PORT", "8766"))
+    video_port = _resolve_available_port(requested_video_port)
+    if video_port != requested_video_port:
+        log.warning(
+            "VISER_VIDEO_PORT %s is in use; using available port %s instead",
+            requested_video_port,
+            video_port,
+        )
 
     video_root_ref = {"path": path.resolve()}
 
