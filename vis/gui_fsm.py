@@ -402,9 +402,6 @@ class GUIStateController:
             if self.manager.arcs_gui.dependency_arcs_visible:
                 self.manager.add_dependency_arcs()
 
-            if self.manager.ft_extractor is not None and self.manager.can_run_clip_query:
-                self.manager.set_ft_extractor(self.manager.ft_extractor)
-
             self.refresh_controls()
             self.manager.arcs_gui.refresh_controls()
             self.manager.query_chat.refresh_controls()

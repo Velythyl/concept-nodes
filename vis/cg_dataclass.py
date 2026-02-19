@@ -22,7 +22,6 @@ class ConceptGraphData:
     dense_points: np.ndarray | None
     dense_colors: np.ndarray | None
     arc_states: list[dict] | None
-    clip_features: np.ndarray
     map_meta: dict[str, Any] | None
 
     @property
@@ -37,7 +36,6 @@ class ConceptGraphData:
         segments_anno = cls._load_segments_annotations(path)
         pcd_o3d = cls._split_segments(pcd, segments_anno)
 
-        clip_features = cls._load_clip_features(path, expected_rows=len(pcd_o3d))
         dense_points, dense_colors = cls._load_dense_cloud(path)
         arc_states = cls._load_arc_states(path, arcs_enabled=arcs_enabled)
         map_meta = cls._load_map_meta(path)
@@ -49,7 +47,6 @@ class ConceptGraphData:
             dense_points=dense_points,
             dense_colors=dense_colors,
             arc_states=arc_states,
-            clip_features=clip_features,
             map_meta=map_meta,
         )
 
@@ -85,56 +82,6 @@ class ConceptGraphData:
             return None
 
         return pcd
-
-    @staticmethod
-    def _load_clip_features(path: Path, *, expected_rows: int) -> np.ndarray:
-        clip_path = path / "clip_features.npy"
-        if not clip_path.exists():
-            log.warning("CLIP features not found at %s", clip_path)
-            if expected_rows <= 0:
-                return np.zeros((0, 1), dtype=np.float32)
-            return np.zeros((expected_rows, 1), dtype=np.float32)
-
-        try:
-            clip_features = np.load(clip_path)
-        except Exception as exc:  # noqa: BLE001
-            log.warning("Failed to load CLIP features from %s: %s", clip_path, exc)
-            if expected_rows <= 0:
-                return np.zeros((0, 1), dtype=np.float32)
-            return np.zeros((expected_rows, 1), dtype=np.float32)
-
-        clip_features = np.asarray(clip_features, dtype=np.float32)
-        if clip_features.ndim == 1:
-            clip_features = clip_features[None, :]
-        elif clip_features.ndim != 2:
-            log.warning("Unexpected CLIP feature shape %s at %s", clip_features.shape, clip_path)
-            feature_dim = int(np.prod(clip_features.shape[1:])) if clip_features.size > 0 else 1
-            clip_features = clip_features.reshape(clip_features.shape[0], feature_dim)
-
-        if expected_rows <= 0:
-            return clip_features
-
-        feature_dim = clip_features.shape[1] if clip_features.shape[1] > 0 else 1
-        if clip_features.shape[0] == expected_rows:
-            return clip_features
-
-        if clip_features.shape[0] > expected_rows:
-            log.warning(
-                "CLIP features rows (%s) exceed object count (%s); truncating",
-                clip_features.shape[0],
-                expected_rows,
-            )
-            return clip_features[:expected_rows]
-
-        log.warning(
-            "CLIP features rows (%s) below object count (%s); padding with zeros",
-            clip_features.shape[0],
-            expected_rows,
-        )
-        padded = np.zeros((expected_rows, feature_dim), dtype=np.float32)
-        if clip_features.shape[0] > 0:
-            padded[: clip_features.shape[0]] = clip_features
-        return padded
 
     @staticmethod
     def _load_dense_cloud(path: Path) -> tuple[np.ndarray | None, np.ndarray | None]:

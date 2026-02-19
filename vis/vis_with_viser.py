@@ -5,7 +5,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import hydra
-import torch
 from omegaconf import DictConfig
 import logging
 import os
@@ -31,7 +30,6 @@ from typing import Any
 from concept_graphs.floor_segment import segment_floor_points
 from concept_graphs.utils import set_seed
 from concept_graphs.viz.utils import similarities_to_rgb
-from concept_graphs.mapping.similarity.semantic import CosineSimilarity01
 from agent import ChatAgent
 from chat_history import ChatManager
 from vis.arcs_gui import ArcGUIController, setup_arcs_gui
@@ -46,7 +44,6 @@ from vis.notification_manager import NotificationManager
 from vis.queries_and_chat import (
     QueriesAndChatController,
     setup_agent_gui,
-    setup_clip_query_gui,
     setup_llm_query_gui,
 )
 from vis.box_annotator import BoxAnnotatorController, setup_box_annotator_gui
@@ -71,8 +68,6 @@ class ViserCallbackManager:
         self,
         server: viser.ViserServer,
         pcd_o3d,
-        clip_ft,
-        ft_extractor=None,
         segments_anno=None,
         dense_points=None,
         dense_colors=None,
@@ -86,7 +81,6 @@ class ViserCallbackManager:
         arc_states: list[dict] | None = None,
     ):
         self.server = server
-        self.ft_extractor = ft_extractor  # Might be None initially
         self.point_size = 0.023
         self.point_count = 1.0
         self.default_axes_ordering = axes_ordering
@@ -96,9 +90,6 @@ class ViserCallbackManager:
         self._apply_map_meta(map_meta)
         self.map_path = Path(map_path) if map_path is not None else None
         self.floor_pcd_path = self.map_path / "floor.pcd" if self.map_path is not None else None
-        self.clip_features_file_available = (
-            self.map_path is not None and (self.map_path / "clip_features.npy").exists()
-        )
         self.llm_client = llm_client
         self.llm_model = llm_model
         self.llm_system_prompt = llm_system_prompt or LLM_SYSTEM_PROMPT
@@ -156,38 +147,11 @@ class ViserCallbackManager:
         # Similarity data
         self.sim_query = 0.5 * np.ones(self.num_objects)
 
-        # Semantic features (initialize on CPU; move later if extractor loads async)
-        self.semantic_sim = CosineSimilarity01()
-        if clip_ft is None:
-            clip_ft = np.zeros((self.num_objects, 1), dtype=np.float32)
-        clip_ft = np.asarray(clip_ft, dtype=np.float32)
-        if clip_ft.ndim == 1:
-            clip_ft = clip_ft[None, :]
-        if clip_ft.ndim != 2:
-            clip_ft = clip_ft.reshape(clip_ft.shape[0], -1)
-        self.semantic_tensor = torch.from_numpy(clip_ft).float()
-
         # Capability flags used to gate UI and behavior when artifacts are missing
         self.has_segment_objects = self.num_objects > 0
         self.has_dense_cloud = self.dense_points is not None and len(self.dense_points) > 0
-        self.has_clip_features = (
-            self.semantic_tensor.ndim == 2
-            and self.semantic_tensor.shape[0] == self.num_objects
-            and self.semantic_tensor.shape[1] > 0
-            and self.semantic_tensor.numel() > 0
-            and self.has_segment_objects
-        )
-        self.can_run_clip_query = (
-            self.has_segment_objects
-            and self.has_clip_features
-            and self.clip_features_file_available
-        )
         self.can_run_llm_query = self.has_segment_objects and self.llm_client is not None
         self.can_show_arcs = bool(self.arc_states) and self.has_segment_objects
-
-        # If extractor was provided up front, finish setup now
-        if self.ft_extractor is not None:
-            self.set_ft_extractor(self.ft_extractor)
 
         # Track current visualization handles
         self.pcd_handles = []
@@ -428,7 +392,6 @@ class ViserCallbackManager:
         self.map_path = Path(map_path)
         self._apply_map_meta(cg.map_meta)
         self.floor_pcd_path = self.map_path / "floor.pcd"
-        self.clip_features_file_available = (self.map_path / "clip_features.npy").exists()
         self.arc_states = cg.arc_states or []
         self.current_arc_state_index = 0
 
@@ -473,30 +436,8 @@ class ViserCallbackManager:
         self.llm_palette_active = False
         self.llm_palette_colors = None
 
-        clip_ft = cg.clip_features
-        if clip_ft is None:
-            clip_ft = np.zeros((self.num_objects, 1), dtype=np.float32)
-        clip_ft = np.asarray(clip_ft, dtype=np.float32)
-        if clip_ft.ndim == 1:
-            clip_ft = clip_ft[None, :]
-        if clip_ft.ndim != 2:
-            clip_ft = clip_ft.reshape(clip_ft.shape[0], -1)
-        self.semantic_tensor = torch.from_numpy(clip_ft).float()
-
         self.has_segment_objects = self.num_objects > 0
         self.has_dense_cloud = self.dense_points is not None and len(self.dense_points) > 0
-        self.has_clip_features = (
-            self.semantic_tensor.ndim == 2
-            and self.semantic_tensor.shape[0] == self.num_objects
-            and self.semantic_tensor.shape[1] > 0
-            and self.semantic_tensor.numel() > 0
-            and self.has_segment_objects
-        )
-        self.can_run_clip_query = (
-            self.has_segment_objects
-            and self.has_clip_features
-            and self.clip_features_file_available
-        )
         self.can_run_llm_query = self.has_segment_objects and self.llm_client is not None
         self.can_show_arcs = bool(self.arc_states) and self.has_segment_objects
 
@@ -523,10 +464,6 @@ class ViserCallbackManager:
     def get_current_timestep_from_slider(self) -> tuple[int, float]:
         """Get the current day and hour from the arc state slider."""
         return self.arcs_gui.get_current_timestep_from_slider()
-
-    def set_ft_extractor(self, ft_extractor):
-        """Called when the feature extractor finishes loading in the background."""
-        self.query_chat.set_ft_extractor(ft_extractor)
 
     def set_llm_client(self, llm_client: OpenAI, llm_model: str | None = None):
         """Attach the OpenAI client once credentials are available."""
@@ -1117,10 +1054,6 @@ class ViserCallbackManager:
         """Store reference to the similarity checkbox for enabling/disabling."""
         self.gui_fsm.set_similarity_checkbox(checkbox)
 
-    def query(self, query_text: str, client=None):
-        """Perform CLIP query and update similarity visualization."""
-        return self.query_chat.query(query_text, client=client)
-
     def llm_query(self, query_text: str, client=None):
         """Send query to OpenAI and color top matches."""
         return self.query_chat.llm_query(query_text, client=client)
@@ -1144,9 +1077,6 @@ def setup_gui(server: viser.ViserServer, manager: ViserCallbackManager, cfg: Dic
 
     if cfg.arcs_enabled and gui_cfg.arcs.visible:
         setup_arcs_gui(server, manager, gui_cfg)
-
-    if gui_cfg.clip_query.visible:
-        setup_clip_query_gui(server, manager, gui_cfg)
 
     if gui_cfg.llm_query.visible:
         setup_llm_query_gui(server, manager, gui_cfg)
@@ -1355,6 +1285,16 @@ def _resolve_available_port(preferred_port: int, host: str = "0.0.0.0") -> int:
         return int(sock.getsockname()[1])
 
 
+def _get_port_from_config(cfg: DictConfig, key: str, default: int) -> int:
+    """Read a port from cfg.ports, coercing to int and falling back to default."""
+    raw_value = cfg.get("ports", {}).get(key, default)
+    try:
+        return int(raw_value)
+    except (TypeError, ValueError):
+        log.warning("Invalid cfg.ports.%s=%r; using default %s", key, raw_value, default)
+        return default
+
+
 @hydra.main(version_base=None, config_path="../conf", config_name="visualizer")
 def main(cfg: DictConfig):
     set_seed(cfg.seed)
@@ -1374,11 +1314,11 @@ def main(cfg: DictConfig):
         log.warning("OPENAI_API_KEY not set; LLM query and agent features will be disabled")
 
     # Create Viser server
-    requested_viser_port = int(os.getenv("VISER_PORT", "8765"))
+    requested_viser_port = _get_port_from_config(cfg, "viser", 8765)
     viser_port = _resolve_available_port(requested_viser_port)
     if viser_port != requested_viser_port:
         log.warning(
-            "VISER_PORT %s is in use; using available port %s instead",
+            "Configured viser port %s is in use; using available port %s instead",
             requested_viser_port,
             viser_port,
         )
@@ -1389,8 +1329,6 @@ def main(cfg: DictConfig):
     manager = ViserCallbackManager(
         server=server,
         pcd_o3d=cg.pcd_o3d,
-        clip_ft=cg.clip_features,
-        ft_extractor=None,
         segments_anno=cg.segments_anno,
         dense_points=cg.dense_points,
         dense_colors=cg.dense_colors,
@@ -1436,15 +1374,6 @@ def main(cfg: DictConfig):
             auto_close_seconds=2.0,
         )
 
-        if manager.can_run_clip_query and manager.ft_extractor is None:
-            manager.notify_clients(
-                title="CLIP model",
-                body="CLIP model is still loading...",
-                client=client,
-                color="yellow",
-                with_close_button=True,
-            )
-
     # Add initial point clouds
     manager.add_point_clouds()
 
@@ -1455,11 +1384,11 @@ def main(cfg: DictConfig):
     box_annotator_refresh = setup_gui(server, manager, cfg)
     
     # Start HTTP server for video in background
-    requested_video_port = int(os.getenv("VISER_VIDEO_PORT", "8766"))
+    requested_video_port = _get_port_from_config(cfg, "video", 8766)
     video_port = _resolve_available_port(requested_video_port)
     if video_port != requested_video_port:
         log.warning(
-            "VISER_VIDEO_PORT %s is in use; using available port %s instead",
+            "Configured video port %s is in use; using available port %s instead",
             requested_video_port,
             video_port,
         )
@@ -1506,36 +1435,6 @@ def main(cfg: DictConfig):
         refresh_notes=refresh_notes,
         box_annotator_refresh=box_annotator_refresh,
     )
-
-    # Background-load the CLIP model so UI is responsive immediately
-    def load_model_background():
-        log.info("Starting background loading of CLIP model...")
-        if not manager.can_run_clip_query:
-            log.info("Skipping CLIP model load: CLIP features or objects are unavailable")
-            return
-        try:
-            extractor = hydra.utils.instantiate(cfg.ft_extraction)
-            manager.set_ft_extractor(extractor)
-        except Exception as e:
-            log.error(f"Failed to load CLIP model: {e}")
-            manager.notify_clients(
-                title="CLIP model",
-                body="Failed to load CLIP model; search is unavailable.",
-                color="red",
-                with_close_button=True,
-            )
-            return
-        manager.notify_clients(
-            title="CLIP model loaded!",
-            body="CLIP model has been successfully loaded; search is available.",
-            color="green",
-            with_close_button=True,
-        )
-        log.info("Finished background loading of CLIP model.")
-
-
-    loader_thread = threading.Thread(target=load_model_background, daemon=True)
-    loader_thread.start()
 
     # Keep server running
     log.info("Visualization ready. Open http://localhost:8080 in your browser.")

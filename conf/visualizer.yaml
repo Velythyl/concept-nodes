@@ -10,6 +10,9 @@ device: mps
 seed: 42
 axes_ordering: "xyz"
 floor_axis: "z"
+ports:
+  viser: 8765
+  video: 8766
 
 # LLM used for the one-shot query panel (non-agent)
 llm_model: gpt-4o-mini

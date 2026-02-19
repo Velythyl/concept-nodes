@@ -13,14 +13,12 @@ log = logging.getLogger(__name__)
 
 
 class QueriesAndChatController:
-    """Handles CLIP queries, LLM queries, and chat interactions."""
+    """Handles LLM queries and chat interactions."""
 
     def __init__(self, manager: "ViserCallbackManager") -> None:
         self.manager = manager
         self.chat_messages: list[tuple[str, str]] = []
         self.chat_markdown_handle = None
-        self.clip_query_input = None
-        self.clip_query_btn = None
         self.llm_query_input = None
         self.llm_query_btn = None
         self.chat_input = None
@@ -33,27 +31,6 @@ class QueriesAndChatController:
         self.manager.notify_clients(
             title="Chat Agent",
             body="Chat agent is now ready.",
-            color="green",
-            auto_close_seconds=2.0,
-        )
-
-    def set_ft_extractor(self, ft_extractor):
-        """Called when the feature extractor finishes loading in the background."""
-        if not self.manager.can_run_clip_query:
-            log.info("CLIP extractor loaded but CLIP querying is disabled (missing object/features data)")
-            return
-
-        self.manager.ft_extractor = ft_extractor
-        device = getattr(self.manager.ft_extractor, "device", "cpu")
-
-        # Move pre-loaded CLIP features to model device
-        self.manager.semantic_tensor = self.manager.semantic_tensor.to(device)
-
-        msg = f"CLIP Model loaded on {device}. Search is now active."
-        log.info(msg)
-        self.manager.notify_clients(
-            title="System",
-            body=msg,
             color="green",
             auto_close_seconds=2.0,
         )
@@ -79,11 +56,6 @@ class QueriesAndChatController:
         self.chat_markdown_handle = markdown_handle
         self._update_chat_markdown()
 
-    def set_clip_query_controls(self, query_input, query_btn):
-        """Register CLIP query controls for runtime refreshes."""
-        self.clip_query_input = query_input
-        self.clip_query_btn = query_btn
-
     def set_llm_query_controls(self, query_input, query_btn):
         """Register LLM query controls for runtime refreshes."""
         self.llm_query_input = query_input
@@ -96,11 +68,6 @@ class QueriesAndChatController:
 
     def refresh_controls(self):
         """Refresh query/chat controls after map changes."""
-        if self.clip_query_input is not None:
-            self.clip_query_input.disabled = not self.manager.can_run_clip_query
-        if self.clip_query_btn is not None:
-            self.clip_query_btn.disabled = not self.manager.can_run_clip_query
-
         if self.llm_query_input is not None:
             self.llm_query_input.disabled = not self.manager.can_run_llm_query
         if self.llm_query_btn is not None:
@@ -157,44 +124,6 @@ class QueriesAndChatController:
             f"{body}"
             "</div>"
         )
-
-    def query(self, query_text: str, client=None):
-        """Perform CLIP query and update similarity visualization."""
-        if not self.manager.can_run_clip_query:
-            msg = "CLIP query is unavailable because object data or CLIP features are missing."
-            self.manager.notify_clients(
-                title="CLIP model",
-                body=msg,
-                color="yellow",
-                with_close_button=True,
-                auto_close_seconds=2.0,
-                client=client,
-            )
-            log.warning(msg)
-            return
-
-        if self.manager.ft_extractor is None:
-            msg = "CLIP model is still loading... please wait."
-            log.warning(msg)
-            self.manager.notify_clients(
-                title="CLIP model",
-                body=msg,
-                color="yellow",
-                with_close_button=True,
-                auto_close_seconds=2.0,
-                client=client,
-            )
-            return
-
-        # Reset any LLM-specific palette so CLIP queries use the inferno colormap.
-        self.manager.llm_palette_active = False
-        self.manager.llm_palette_colors = None
-
-        query_ft = self.manager.ft_extractor.encode_text([query_text])
-        self.manager.sim_query = self.manager.semantic_sim(query_ft, self.manager.semantic_tensor)
-        self.manager.sim_query = self.manager.sim_query.squeeze().cpu().numpy()
-        self.manager.gui_fsm.enable_similarity_mode()
-        log.info("Query: '%s' - Top match: Object %s", query_text, np.argmax(self.manager.sim_query))
 
     def _build_llm_messages(self, query_text: str):
         """Construct system+user messages for OpenAI completion."""
@@ -393,22 +322,6 @@ class QueriesAndChatController:
 
         self.add_chat_message("Agent", reply)
         return reply
-
-
-def setup_clip_query_gui(server, manager, gui_cfg):
-    """Set up the GUI controls for CLIP query."""
-    with server.gui.add_folder("CLIP Query", expand_by_default=gui_cfg.clip_query.expanded):
-        # Query input
-        query_input = server.gui.add_text("Query", initial_value="")
-        query_btn = server.gui.add_button("Search")
-        manager.query_chat.set_clip_query_controls(query_input, query_btn)
-        query_input.disabled = not manager.can_run_clip_query
-        query_btn.disabled = not manager.can_run_clip_query
-
-        @query_btn.on_click
-        def _(event):
-            if query_input.value.strip():
-                manager.query(query_input.value.strip(), client=event.client)
 
 
 def setup_llm_query_gui(server, manager, gui_cfg):
