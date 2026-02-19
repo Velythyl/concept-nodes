@@ -320,6 +320,10 @@ class BoxAnnotatorController:
         # Aggregate controls for multi-selection transforms.
         self._multi_handles = _MultiSelectionHandles()
         self._prev_selected_ids: set[str] = set()
+        self._global_multi_select_rotation = False
+        
+    def set_global_multi_select_rotation(self, enabled: bool):
+        self._global_multi_select_rotation = bool(enabled)
 
     # ── helpers ───────────────────────────────────────────────────────────
 
@@ -1326,13 +1330,31 @@ class BoxAnnotatorController:
             return
 
         if wxyz_changed:
-            for box in boxes:
-                self._apply_box_orientation_from_gizmo_delta(
-                    box,
-                    prev_wxyz,
-                    new_wxyz,
-                    update_gizmo=False,
-                )
+            R_old = _quat_to_rotmat(prev_wxyz)
+            R_new = _quat_to_rotmat(new_wxyz)
+            R_delta = R_new @ R_old.T
+
+            if self._global_multi_select_rotation:
+                if h.bbox_min is not None and h.bbox_max is not None:
+                    pivot_world = (h.bbox_min + h.bbox_max) / 2.0
+                else:
+                    pivot_world = prev_pos - _gizmo_global_offset()
+
+                for box in boxes:
+                    self._apply_box_rotation_delta(
+                        box,
+                        R_delta,
+                        pivot_world=pivot_world,
+                        update_gizmo=False,
+                    )
+            else:
+                for box in boxes:
+                    self._apply_box_orientation_from_gizmo_delta(
+                        box,
+                        prev_wxyz,
+                        new_wxyz,
+                        update_gizmo=False,
+                    )
 
             h.prev_gizmo_wxyz = new_wxyz.copy()
             h.prev_gizmo_position = new_pos.copy()
@@ -2123,6 +2145,9 @@ def setup_box_annotator_gui(
         select_btn = server.gui.add_button("Select Box", icon=viser.Icon.POINTER)
         multi_select_icon = getattr(viser.Icon, "RECTANGLE", viser.Icon.POINTER)
         multi_select_btn = server.gui.add_button("Select Box", icon=multi_select_icon)
+        global_multi_rotate_checkbox = server.gui.add_checkbox(
+            "Global Multi-Select Rotation", initial_value=False
+        )
         deselect_all_btn = server.gui.add_button("Deselect All Boxes")
         dropdown = server.gui.add_dropdown(
             "Select Box",
@@ -2226,6 +2251,12 @@ def setup_box_annotator_gui(
         def _(event: viser.GuiEvent):
             if event.client is not None:
                 controller.enter_multi_selection_mode(event.client)
+
+        @global_multi_rotate_checkbox.on_update
+        def _(_):
+            controller.set_global_multi_select_rotation(
+                global_multi_rotate_checkbox.value
+            )
 
         @deselect_all_btn.on_click
         def _(_):

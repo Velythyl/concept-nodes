@@ -294,7 +294,7 @@ class ViserCallbackManager:
     @staticmethod
     def _clamp_point_count(value: float | int) -> float:
         try:
-            return float(np.clip(float(value), 0.0, 1.0))
+            return float(np.clip(float(value), 0.1, 1.0))
         except (TypeError, ValueError):
             return 1.0
 

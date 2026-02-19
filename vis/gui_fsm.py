@@ -438,7 +438,7 @@ def setup_visualization_gui(server, manager: "ViserCallbackManager", gui_cfg, cm
         )
         point_count_slider = server.gui.add_slider(
             "Point Count",
-            min=0.0,
+            min=0.1,
             max=1.0,
             step=0.01,
             initial_value=manager.point_count,
