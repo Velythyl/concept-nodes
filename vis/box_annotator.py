@@ -425,7 +425,7 @@ class BoxAnnotatorController:
 
         if self._multi_handles.gizmo_handle is None:
             prefix = "/annotations/multi_selection"
-            gizmo_wxyz = self._resolve_multi_gizmo_wxyz()
+            gizmo_wxyz = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float64)
             gizmo_pos = center + _gizmo_global_offset()
 
             wire = self.server.scene.add_box(
@@ -458,14 +458,6 @@ class BoxAnnotatorController:
             for ci, signs in enumerate(_CORNER_SIGNS):
                 world_pos = center + signs * (dims / 2.0)
                 corner_wxyz = _corner_gizmo_wxyz(multi_wxyz, signs)
-                sphere = self.server.scene.add_icosphere(
-                    name=f"{prefix}/corner_{ci}/sphere",
-                    radius=0.03,
-                    color=_HANDLE_COLOR,
-                    position=tuple(world_pos.tolist()),
-                )
-                corner_handles.append(sphere)
-
                 corner_gizmo = self.server.scene.add_transform_controls(
                     name=f"{prefix}/corner_{ci}/gizmo",
                     scale=0.22,
@@ -956,7 +948,7 @@ class BoxAnnotatorController:
             name=f"{prefix}/gizmo",
             scale=0.35,
             line_width=2.0,
-            wxyz=tuple(box.wxyz.tolist()),
+            wxyz=(1.0, 0.0, 0.0, 0.0),
             position=tuple(gizmo_world_pos.tolist()),
             disable_sliders=True,
             depth_test=False,
@@ -978,7 +970,7 @@ class BoxAnnotatorController:
             position=tuple(label_world.tolist()),
         )
 
-        # Corner resize handles (8 corners)
+        # Corner resize gizmos (8 corners)
         corner_handles: list[Any] = []
         corner_gizmo_handles: list[Any] = []
         for ci, signs in enumerate(_CORNER_SIGNS):
@@ -986,15 +978,6 @@ class BoxAnnotatorController:
             local_offset = signs * (box.dimensions / 2)
             world_pos = box.center + R @ local_offset
             corner_wxyz = _corner_gizmo_wxyz(box.wxyz, signs)
-
-            # Small sphere as visual indicator
-            sphere = self.server.scene.add_icosphere(
-                name=f"{prefix}/corner_{ci}/sphere",
-                radius=0.03,
-                color=_HANDLE_COLOR,
-                position=tuple(world_pos.tolist()),
-            )
-            corner_handles.append(sphere)
 
             # Translate-only gizmo: arrows hidden, plane sliders active
             corner_gizmo = self.server.scene.add_transform_controls(
@@ -1031,7 +1014,7 @@ class BoxAnnotatorController:
             label_handle=label_handle,
             corner_handles=corner_handles,
             corner_gizmo_handles=corner_gizmo_handles,
-            prev_gizmo_wxyz=box.wxyz.copy(),
+            prev_gizmo_wxyz=np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float64),
             prev_gizmo_position=gizmo_world_pos.copy(),
         )
         self._handles[bid] = handles
@@ -1179,18 +1162,24 @@ class BoxAnnotatorController:
         center: np.ndarray,
         wxyz: np.ndarray,
     ):
-        """Set gizmo pose from object center using shared single-box logic."""
+        """Set gizmo pose from object center using shared single-box logic.
+
+        The gizmo is always axis-aligned (identity quaternion), hovering 2m above
+        the box center. The ``wxyz`` parameter is accepted for API compatibility
+        but ignored; we always reset to axis-aligned so rotations apply as deltas.
+        """
         if handles.gizmo_handle is None:
             return
         gizmo_world = center + _gizmo_global_offset()
+        identity_wxyz = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float64)
         suppress_events = handles is self._multi_handles
         if suppress_events:
             self._suppress_multi_gizmo_events = True
         try:
             handles.gizmo_handle.position = tuple(gizmo_world.tolist())
-            handles.gizmo_handle.wxyz = tuple(wxyz.tolist())
+            handles.gizmo_handle.wxyz = tuple(identity_wxyz.tolist())
             handles.prev_gizmo_position = gizmo_world.copy()
-            handles.prev_gizmo_wxyz = wxyz.copy()
+            handles.prev_gizmo_wxyz = identity_wxyz.copy()
         finally:
             if suppress_events:
                 self._suppress_multi_gizmo_events = False
@@ -1283,7 +1272,7 @@ class BoxAnnotatorController:
             if box_id in self._selected_ids and not self.is_multi_selected:
                 self._sync_gui_to_box(box)
 
-            # After the user lets go, rebuild gizmo from scratch
+            # After the user lets go, snap gizmo back to axis-aligned
             self._schedule_gizmo_rebuild(box_id)
             self._mark_out_of_sync()
 
@@ -1298,6 +1287,7 @@ class BoxAnnotatorController:
 
             if box.id in self._selected_ids and not self.is_multi_selected:
                 self._sync_gui_to_box(box)
+            self._schedule_gizmo_rebuild(box_id)
             self._mark_out_of_sync()
 
     def _on_multi_central_gizmo_moved(self, event: viser.TransformControlsEvent):
@@ -1345,6 +1335,7 @@ class BoxAnnotatorController:
                     bbox_max,
                     update_gizmo_pose=False,
                 )
+            self._schedule_multi_gizmo_reset()
             self._mark_out_of_sync()
         elif pos_changed:
             delta = new_pos - prev_pos
@@ -1360,6 +1351,7 @@ class BoxAnnotatorController:
                     bbox_max,
                     update_gizmo_pose=False,
                 )
+            self._schedule_multi_gizmo_reset()
             self._mark_out_of_sync()
 
     def _on_multi_corner_handle_moved(
@@ -1472,7 +1464,7 @@ class BoxAnnotatorController:
         if h.label_handle is not None:
             h.label_handle.position = tuple(label_world.tolist())
 
-        # Corner spheres + gizmos
+        # Corner gizmos
         for ci, signs in enumerate(_CORNER_SIGNS):
             local_off = signs * (box.dimensions / 2)
             world_pos = box.center + R @ local_off
@@ -1492,7 +1484,7 @@ class BoxAnnotatorController:
             self._set_per_box_controls_visible(box.id, False)
 
     def _schedule_gizmo_rebuild(self, box_id: str):
-        """Debounced full rebuild after a rotation drag ends (~400 ms)."""
+        """Debounced gizmo snap-to-identity after central drag ends."""
         old = self._gizmo_rebuild_timers.pop(box_id, None)
         if old is not None:
             old.cancel()
@@ -1500,14 +1492,39 @@ class BoxAnnotatorController:
         def _rebuild():
             self._gizmo_rebuild_timers.pop(box_id, None)
             box = self._boxes.get(box_id)
-            if box is None:
+            handles = self._handles.get(box_id)
+            if box is None or handles is None:
                 return
-            self._rebuild_box_visuals(box)
+            self._set_gizmo_pose_from_center(handles, box.center, box.wxyz)
             if box_id in self._selected_ids:
                 self._update_box_color(box_id, selected=True)
 
-        t = threading.Timer(0.4, _rebuild)
+        t = threading.Timer(0.12, _rebuild)
         self._gizmo_rebuild_timers[box_id] = t
+        t.start()
+
+    def _schedule_multi_gizmo_reset(self):
+        """Debounced snap of the multi-selection gizmo to identity orientation."""
+        if self._multi_handles_rebuild_timer is not None:
+            self._multi_handles_rebuild_timer.cancel()
+
+        def _reset():
+            self._multi_handles_rebuild_timer = None
+            if len(self._selected_ids) <= 1:
+                return
+            h = self._multi_handles
+            if h.gizmo_handle is None:
+                return
+            aabb = self._compute_selection_aabb()
+            if aabb is None:
+                return
+            center, _, bbox_min, bbox_max = aabb
+            self._set_gizmo_pose_from_center(h, center, np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float64))
+            h.bbox_min = bbox_min.copy()
+            h.bbox_max = bbox_max.copy()
+
+        t = threading.Timer(0.12, _reset)
+        self._multi_handles_rebuild_timer = t
         t.start()
 
     def _schedule_multi_handles_rebuild(self):
