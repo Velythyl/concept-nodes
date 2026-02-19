@@ -1265,6 +1265,73 @@ def setup_data_collection_folder(server: viser.ViserServer, map_path: Path, cfg:
     return refresh
 
 
+def _read_notes_from_meta(map_path: Path) -> str:
+    """Read notes string from map metadata."""
+    meta_path = map_path / "meta.json"
+    if not meta_path.exists():
+        return ""
+    try:
+        with open(meta_path, "r") as f:
+            meta = json.load(f)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Failed reading map metadata at %s: %s", meta_path, exc)
+        return ""
+
+    if not isinstance(meta, dict):
+        return ""
+
+    notes = meta.get("notes", "")
+    return notes if isinstance(notes, str) else str(notes)
+
+
+def _write_notes_to_meta(map_path: Path, notes: str):
+    """Persist notes into map metadata under the `notes` field."""
+    meta_path = map_path / "meta.json"
+    meta: dict[str, Any] = {}
+
+    if meta_path.exists():
+        try:
+            with open(meta_path, "r") as f:
+                loaded = json.load(f)
+            if isinstance(loaded, dict):
+                meta = loaded
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Failed reading existing map metadata at %s: %s", meta_path, exc)
+
+    meta["notes"] = notes
+
+    try:
+        with open(meta_path, "w") as f:
+            json.dump(meta, f, indent=2)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Failed writing map metadata at %s: %s", meta_path, exc)
+
+
+def setup_notes_folder(server: viser.ViserServer, map_path: Path, cfg: DictConfig):
+    """Set up a Notes folder with a raw multiline text area synced to meta.json."""
+    gui_cfg = cfg.gui
+    notes_cfg = gui_cfg.get("notes", {})
+    expanded = notes_cfg.get("expanded", False)
+    notes_map_ref = {"path": map_path.resolve()}
+
+    with server.gui.add_folder("Notes", expand_by_default=expanded):
+        notes_input = server.gui.add_text(
+            "Notes",
+            initial_value=_read_notes_from_meta(notes_map_ref["path"]),
+            multiline=True,
+        )
+
+    @notes_input.on_update
+    def _(event):
+        _write_notes_to_meta(notes_map_ref["path"], notes_input.value)
+
+    def refresh(selected_map_path: Path):
+        notes_map_ref["path"] = selected_map_path.resolve()
+        notes_input.value = _read_notes_from_meta(notes_map_ref["path"])
+
+    return refresh
+
+
 def _has_any_videos(map_path: Path) -> bool:
     for video_filename in ("rgb.mp4", "depth.mp4", "rgbd.mp4"):
         if (map_path / video_filename).exists():
@@ -1402,9 +1469,11 @@ def main(cfg: DictConfig):
     
     # Setup Data Collection folder with video
     refresh_data_collection = setup_data_collection_folder(server, path, cfg, video_port=video_port)
+    refresh_notes = setup_notes_folder(server, path, cfg)
     manager.gui_fsm.configure_map_switch_refreshes(
         video_root_ref=video_root_ref,
         refresh_data_collection=refresh_data_collection,
+        refresh_notes=refresh_notes,
         box_annotator_refresh=box_annotator_refresh,
     )
 

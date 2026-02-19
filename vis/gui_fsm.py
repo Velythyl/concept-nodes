@@ -256,6 +256,7 @@ class GUIStateController:
         *,
         video_root_ref: dict | None = None,
         refresh_data_collection: Callable[[Path], None] | None = None,
+        refresh_notes: Callable[[Path], None] | None = None,
         box_annotator_refresh: Callable[[Path], None] | None = None,
     ):
         """Register standard map-switch refresh behavior used by the app."""
@@ -265,6 +266,8 @@ class GUIStateController:
                 video_root_ref["path"] = new_map_path.resolve()
             if callable(refresh_data_collection):
                 refresh_data_collection(new_map_path)
+            if callable(refresh_notes):
+                refresh_notes(new_map_path)
             if callable(box_annotator_refresh):
                 box_annotator_refresh(new_map_path)
 
