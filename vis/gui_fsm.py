@@ -283,8 +283,7 @@ class GUIStateController:
 
     def switch_to_map(self, map_path: Path, cfg: DictConfig):
         """Switch to another saved map in-process and refresh scene/UI."""
-        if not self._map_switch_lock.acquire(blocking=False):
-            log.info("Map switch already in progress; skipping request for %s", map_path)
+        if not self._map_switch_lock.acquire(blocking=True):
             return
 
         try:
