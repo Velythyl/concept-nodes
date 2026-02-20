@@ -314,11 +314,31 @@ class GUIStateController:
                 return
 
             mode_state = {
-                "rgb": self.manager.rgb_enabled,
-                "random": self.manager.random_enabled,
-                "similarity": self.manager.similarity_enabled,
-                "dense": self.manager.dense_enabled,
-                "segment_floor": self.manager.segment_floor_enabled,
+                "rgb": (
+                    bool(self.rgb_checkbox.value)
+                    if self.rgb_checkbox is not None
+                    else self.manager.rgb_enabled
+                ),
+                "random": (
+                    bool(self.random_checkbox.value)
+                    if self.random_checkbox is not None
+                    else self.manager.random_enabled
+                ),
+                "similarity": (
+                    bool(self.similarity_checkbox.value)
+                    if self.similarity_checkbox is not None
+                    else self.manager.similarity_enabled
+                ),
+                "dense": (
+                    bool(self.dense_checkbox.value)
+                    if self.dense_checkbox is not None
+                    else self.manager.dense_enabled
+                ),
+                "segment_floor": (
+                    bool(self.floor_segment_checkbox.value)
+                    if self.floor_segment_checkbox is not None
+                    else self.manager.segment_floor_enabled
+                ),
             }
             visibility_state = {
                 "bbox": self.manager.bbox_visible,
