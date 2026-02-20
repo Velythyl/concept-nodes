@@ -11,9 +11,11 @@ import os
 import json
 import hashlib
 import tempfile
+import errno
 import gc
 from functools import cached_property
 from http.server import SimpleHTTPRequestHandler
+from urllib.parse import urlsplit, urlunsplit
 import socket
 import socketserver
 
@@ -59,6 +61,7 @@ LLM_SYSTEM_PROMPT = (
 )
 
 SIMILARITY_CMAP = "RdYlGn"
+VIDEO_ROUTE_PREFIX = "/viservideo"
 
 
 class ViserCallbackManager:
@@ -1155,7 +1158,7 @@ def _add_video_to_gui(server: viser.ViserServer, video_filename: str, video_path
         video_port: Port number for the HTTP video server
     """
     if video_path.exists():
-        video_url = f"http://localhost:{video_port}/{video_filename}"
+        video_url = f"http://localhost:{video_port}{VIDEO_ROUTE_PREFIX}/{video_filename}"
         html = _build_video_html(video_filename, video_url, description)
         return server.gui.add_html(html)
     else:
@@ -1181,7 +1184,7 @@ def setup_data_collection_folder(server: viser.ViserServer, map_path: Path, cfg:
         video_path = selected_map_path / video_filename
         if video_path.exists():
             token = str(int(selected_map_path.stat().st_mtime_ns)) if selected_map_path.exists() else "0"
-            video_url = f"http://localhost:{video_port}/{video_filename}?map={token}"
+            video_url = f"http://localhost:{video_port}{VIDEO_ROUTE_PREFIX}/{video_filename}?map={token}"
             return _build_video_html(video_filename, video_url, description)
         return _build_missing_video_html(video_filename, video_path)
     with server.gui.add_folder("Data Collection", expand_by_default=gui_cfg.data_collection.expanded):
@@ -1385,43 +1388,77 @@ def main(cfg: DictConfig):
     
     # Start HTTP server for video in background
     requested_video_port = _get_port_from_config(cfg, "video", 8766)
-    video_port = _resolve_available_port(requested_video_port)
-    if video_port != requested_video_port:
+    video_root_ref = {"path": path.resolve()}
+
+    class VideoHandler(SimpleHTTPRequestHandler):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, directory=str(video_root_ref["path"]), **kwargs)
+
+        def _rewrite_prefixed_path(self) -> bool:
+            """Rewrite /viservideo/* requests to filesystem-rooted paths."""
+            parsed = urlsplit(self.path)
+            request_path = parsed.path
+            route_prefix = VIDEO_ROUTE_PREFIX.rstrip("/")
+            expected_prefix = f"{route_prefix}/"
+
+            if not request_path.startswith(expected_prefix):
+                self.send_error(404, "Not Found")
+                return False
+
+            stripped_path = request_path[len(route_prefix):]
+            self.path = urlunsplit(("", "", stripped_path, parsed.query, ""))
+            return True
+
+        def do_GET(self):
+            if not self._rewrite_prefixed_path():
+                return
+            super().do_GET()
+
+        def do_HEAD(self):
+            if not self._rewrite_prefixed_path():
+                return
+            super().do_HEAD()
+
+        def log_message(self, format, *args):
+            # Suppress HTTP server logs to keep output clean
+            pass
+
+        def copyfile(self, source, outputfile):
+            # Handle BrokenPipeError gracefully when client disconnects
+            try:
+                super().copyfile(source, outputfile)
+            except BrokenPipeError:
+                # Client disconnected before file transfer completed
+                pass
+
+    class ReusableTCPServer(socketserver.TCPServer):
+        allow_reuse_address = True
+
+    try:
+        video_httpd = ReusableTCPServer(("", requested_video_port), VideoHandler)
+    except OSError as exc:
+        if exc.errno != errno.EADDRINUSE:
+            raise
+        video_httpd = ReusableTCPServer(("", 0), VideoHandler)
         log.warning(
             "Configured video port %s is in use; using available port %s instead",
             requested_video_port,
-            video_port,
+            int(video_httpd.server_address[1]),
         )
 
-    video_root_ref = {"path": path.resolve()}
+    video_port = int(video_httpd.server_address[1])
 
     def start_video_server():
-        """Start a simple HTTP server to serve the rgb.mp4 file."""
-        class VideoHandler(SimpleHTTPRequestHandler):
-            def __init__(self, *args, **kwargs):
-                super().__init__(*args, directory=str(video_root_ref["path"]), **kwargs)
-            
-            def log_message(self, format, *args):
-                # Suppress HTTP server logs to keep output clean
-                pass
-            
-            def copyfile(self, source, outputfile):
-                # Handle BrokenPipeError gracefully when client disconnects
-                try:
-                    super().copyfile(source, outputfile)
-                except BrokenPipeError:
-                    # Client disconnected before file transfer completed
-                    pass
-        
         try:
-            with socketserver.TCPServer(("", video_port), VideoHandler) as httpd:
-                log.info("Video server started at http://localhost:%s", video_port)
-                httpd.serve_forever()
+            log.info("Video server started at http://localhost:%s%s", video_port, VIDEO_ROUTE_PREFIX)
+            video_httpd.serve_forever()
         except BrokenPipeError:
             # Client disconnected - ignore
             pass
         except Exception as e:
             log.error(f"Failed to start video server: {e}")
+        finally:
+            video_httpd.server_close()
     
     video_server_thread = threading.Thread(target=start_video_server, daemon=True)
     video_server_thread.start()
