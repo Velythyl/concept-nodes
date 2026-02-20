@@ -20,9 +20,10 @@ class ArcGUIController:
         self.manager = manager
         self.arc_state_slider = None
         self.arc_state_label = None
-        self.forward_arcs_btn = None
-        self.dependency_arcs_btn = None
-        self.all_arcs_btn = None
+        self.forward_arcs_checkbox = None
+        self.dependency_arcs_checkbox = None
+        self.all_arcs_checkbox = None
+        self._syncing_arc_controls = False
         self.forward_arc_handles = []
         self.dependency_arc_handles = []
         self.arc_handles = []
@@ -55,9 +56,25 @@ class ArcGUIController:
         """Store arc control handles for runtime refreshes."""
         self.arc_state_slider = slider
         self.arc_state_label = label
-        self.forward_arcs_btn = forward_btn
-        self.dependency_arcs_btn = dependency_btn
-        self.all_arcs_btn = all_btn
+        self.forward_arcs_checkbox = forward_btn
+        self.dependency_arcs_checkbox = dependency_btn
+        self.all_arcs_checkbox = all_btn
+        self._sync_arc_checkbox_values()
+
+    def _sync_arc_checkbox_values(self):
+        """Sync checkbox values to current arc visibility without triggering handlers."""
+        self._syncing_arc_controls = True
+        try:
+            if self.forward_arcs_checkbox is not None:
+                self.forward_arcs_checkbox.value = self.forward_arcs_visible
+            if self.dependency_arcs_checkbox is not None:
+                self.dependency_arcs_checkbox.value = self.dependency_arcs_visible
+            if self.all_arcs_checkbox is not None:
+                self.all_arcs_checkbox.value = (
+                    self.forward_arcs_visible and self.dependency_arcs_visible
+                )
+        finally:
+            self._syncing_arc_controls = False
 
     def refresh_controls(self):
         """Refresh arc GUI controls after map changes."""
@@ -75,12 +92,14 @@ class ArcGUIController:
         if self.arc_state_label is not None:
             self.arc_state_label.content = self.get_current_arc_state_info()
 
-        if self.forward_arcs_btn is not None:
-            self.forward_arcs_btn.disabled = not self.manager.can_show_arcs
-        if self.dependency_arcs_btn is not None:
-            self.dependency_arcs_btn.disabled = not self.manager.can_show_arcs
-        if self.all_arcs_btn is not None:
-            self.all_arcs_btn.disabled = not self.manager.can_show_arcs
+        if self.forward_arcs_checkbox is not None:
+            self.forward_arcs_checkbox.disabled = not self.manager.can_show_arcs
+        if self.dependency_arcs_checkbox is not None:
+            self.dependency_arcs_checkbox.disabled = not self.manager.can_show_arcs
+        if self.all_arcs_checkbox is not None:
+            self.all_arcs_checkbox.disabled = not self.manager.can_show_arcs
+
+        self._sync_arc_checkbox_values()
 
     def get_current_arcs(self) -> list[dict]:
         """Get arcs from the currently selected ArcState."""
@@ -495,35 +514,45 @@ class ArcGUIController:
 
     def toggle_forward_arcs(self):
         """Toggle forward arc visibility."""
-        if self.forward_arcs_visible:
-            self.remove_forward_arcs()
-        else:
-            self.add_forward_arcs()
-        self.forward_arcs_visible = not self.forward_arcs_visible
+        self.set_forward_arcs_visible(not self.forward_arcs_visible)
 
     def toggle_dependency_arcs(self):
         """Toggle dependency arc visibility."""
-        if self.dependency_arcs_visible:
-            self.remove_dependency_arcs()
-        else:
-            self.add_dependency_arcs()
-        self.dependency_arcs_visible = not self.dependency_arcs_visible
+        self.set_dependency_arcs_visible(not self.dependency_arcs_visible)
 
     def toggle_all_arcs(self):
         """Toggle all arcs (both forward and dependency)."""
         # Determine target state: if any are visible, hide all; otherwise show all
         any_visible = self.forward_arcs_visible or self.dependency_arcs_visible
+        self.set_all_arcs_visible(not any_visible)
 
-        if any_visible:
-            self.remove_forward_arcs()
-            self.remove_dependency_arcs()
-            self.forward_arcs_visible = False
-            self.dependency_arcs_visible = False
-        else:
+    def set_forward_arcs_visible(self, visible: bool):
+        """Set forward arc visibility to an explicit state."""
+        if self.forward_arcs_visible == visible:
+            return
+        if visible:
             self.add_forward_arcs()
+        else:
+            self.remove_forward_arcs()
+        self.forward_arcs_visible = visible
+        self._sync_arc_checkbox_values()
+
+    def set_dependency_arcs_visible(self, visible: bool):
+        """Set dependency arc visibility to an explicit state."""
+        if self.dependency_arcs_visible == visible:
+            return
+        if visible:
             self.add_dependency_arcs()
-            self.forward_arcs_visible = True
-            self.dependency_arcs_visible = True
+        else:
+            self.remove_dependency_arcs()
+        self.dependency_arcs_visible = visible
+        self._sync_arc_checkbox_values()
+
+    def set_all_arcs_visible(self, visible: bool):
+        """Set all arc visibility state."""
+        self.set_forward_arcs_visible(visible)
+        self.set_dependency_arcs_visible(visible)
+        self._sync_arc_checkbox_values()
 
 
 def setup_arcs_gui(server, manager, gui_cfg):
@@ -551,10 +580,17 @@ def setup_arcs_gui(server, manager, gui_cfg):
             arc_gui.set_arc_state_index(int(arc_state_slider.value))
             arc_state_label.content = arc_gui.get_current_arc_state_info()
 
-        # Toggle buttons for different arc types
-        forward_arcs_btn = server.gui.add_button("Toggle Forward Arcs")
-        dependency_arcs_btn = server.gui.add_button("Toggle Dependency Arcs")
-        all_arcs_btn = server.gui.add_button("Toggle All Arcs")
+        # Checkboxes for different arc types
+        forward_arcs_btn = server.gui.add_checkbox(
+            "Forward Arcs", initial_value=arc_gui.forward_arcs_visible
+        )
+        dependency_arcs_btn = server.gui.add_checkbox(
+            "Dependency Arcs", initial_value=arc_gui.dependency_arcs_visible
+        )
+        all_arcs_btn = server.gui.add_checkbox(
+            "All Arcs",
+            initial_value=arc_gui.forward_arcs_visible and arc_gui.dependency_arcs_visible,
+        )
 
         arc_gui.set_arc_controls(
             slider=arc_state_slider,
@@ -570,14 +606,20 @@ def setup_arcs_gui(server, manager, gui_cfg):
         dependency_arcs_btn.disabled = not arcs_enabled
         all_arcs_btn.disabled = not arcs_enabled
 
-        @forward_arcs_btn.on_click
+        @forward_arcs_btn.on_update
         def _(_):
-            arc_gui.toggle_forward_arcs()
+            if arc_gui._syncing_arc_controls:
+                return
+            arc_gui.set_forward_arcs_visible(forward_arcs_btn.value)
 
-        @dependency_arcs_btn.on_click
+        @dependency_arcs_btn.on_update
         def _(_):
-            arc_gui.toggle_dependency_arcs()
+            if arc_gui._syncing_arc_controls:
+                return
+            arc_gui.set_dependency_arcs_visible(dependency_arcs_btn.value)
 
-        @all_arcs_btn.on_click
+        @all_arcs_btn.on_update
         def _(_):
-            arc_gui.toggle_all_arcs()
+            if arc_gui._syncing_arc_controls:
+                return
+            arc_gui.set_all_arcs_visible(all_arcs_btn.value)
